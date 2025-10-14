@@ -7,8 +7,7 @@ def get_conn():
     return conn
 
 def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
+    conn = get_conn(); cur = conn.cursor()
     cur.executescript("""
     CREATE TABLE IF NOT EXISTS invoices (
         invoice_id TEXT PRIMARY KEY,
@@ -17,7 +16,8 @@ def init_db():
         amount INTEGER NOT NULL,
         status TEXT NOT NULL,
         created_at INTEGER NOT NULL,
-        paid_at INTEGER
+        paid_at INTEGER,
+        qris_payload TEXT
     );
     CREATE TABLE IF NOT EXISTS invite_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,8 +28,11 @@ def init_db():
         error TEXT
     );
     """)
-    conn.commit()
-    conn.close()
+    # migrasi ringan: tambah kolom jika belum ada
+    try: cur.execute("ALTER TABLE invoices ADD COLUMN qris_payload TEXT;")
+    except Exception: pass
+    conn.commit(); conn.close()
+
 
 def upsert_invoice(data: dict):
     conn = get_conn()
@@ -73,3 +76,8 @@ def list_invite_logs(invoice_id: str):
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+def update_qris_payload(invoice_id: str, payload: str):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("UPDATE invoices SET qris_payload=? WHERE invoice_id=?", (payload, invoice_id))
+    conn.commit(); conn.close()
