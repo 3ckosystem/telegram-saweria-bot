@@ -2,6 +2,14 @@
 const tg = window.Telegram.WebApp;
 tg.expand();
 
+function getUserId() {
+  const fromInit = tg?.initDataUnsafe?.user?.id;
+  if (fromInit) return fromInit;
+  const qp = new URLSearchParams(window.location.search);
+  const fromQuery = qp.get("uid");
+  return fromQuery ? parseInt(fromQuery, 10) : null;
+}
+
 // Render daftar grup (dari hardcode/SSR)
 async function renderGroups() {
   const groups = (window.injectedGroups || [
@@ -28,15 +36,11 @@ function htmlEscape(s) {
 document.getElementById("pay").onclick = async () => {
   const selected = [...document.querySelectorAll("#groups input:checked")].map(i => i.value);
   const amount = parseInt(document.getElementById("amount").value || "0", 10);
-  if (!selected.length || amount <= 0) {
-    alert("Pilih minimal 1 grup dan nominal > 0");
-    return;
-  }
 
-  const userId = tg.initDataUnsafe?.user?.id;
+  const userId = getUserId();
   if (!userId) {
     document.getElementById("qr").innerHTML =
-      `<div style="color:#c00">Gagal membaca user Telegram. Tutup & buka lagi Mini App.</div>`;
+      `<div style="color:#c00">Gagal membaca user Telegram. Tutup & buka lagi Mini App via tombol bot.</div>`;
     return;
   }
 

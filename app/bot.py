@@ -21,13 +21,20 @@ def build_app() -> Application:
     return Application.builder().token(BOT_TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Tombol untuk membuka Mini App (katalog)
-    webapp_url = f"{BASE_URL}/webapp/index.html"
-    kb = [[KeyboardButton(text="🛍️ Buka Katalog", web_app=WebAppInfo(url=webapp_url))]]
+    # URL Mini App + fallback uid
+    base = os.environ["BASE_URL"]
+    uid = update.effective_user.id
+    webapp_url = f"{base}/webapp/index.html?uid={uid}"
+
+    kb = [[KeyboardButton(
+        text="🛍️ Buka Katalog",
+        web_app=WebAppInfo(url=webapp_url)
+    )]]
     await update.message.reply_text(
         "Pilih grup yang ingin kamu join, lanjutkan pembayaran QRIS, lalu bot akan kirimkan link undangannya.",
         reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
     )
+
 
 # Penting: gunakan Application (app) agar bisa dipanggil dari FastAPI webhook tanpa Context
 async def send_invite_link(app: Application, chat_id: int, target_group_id: str):
