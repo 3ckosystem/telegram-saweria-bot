@@ -1,28 +1,20 @@
-# import os, json
-# from fastapi import FastAPI, Request, HTTPException
-# from fastapi.responses import FileResponse, JSONResponse
-# from fastapi.staticfiles import StaticFiles
-# from pydantic import BaseModel
-# from telegram.ext import Application
-# from .bot import build_app, register_handlers, send_invite_link
-# from . import payments
-# from telegram import Update
-
 import os, json, hmac, hashlib
 from telegram import Update
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from telegram.ext import Application
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
 
-
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET","")
 BASE_URL = os.environ["BASE_URL"]
 GROUPS = json.loads(os.environ.get("GROUP_IDS_JSON","[]"))
+
+ENV = os.getenv("ENV", "dev")  # gunakan "prod" di Railway untuk mematikan debug endpoints
+
 
 # ... existing env
 SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET","")  # opsional
@@ -170,6 +162,31 @@ def health():
 @app.get("/debug/invite-logs/{invoice_id}")
 def debug_invite_logs(invoice_id: str):
     return {"invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
+
+# --- DEBUG ENDPOINTS (AKTIF SAAT ENV != "prod") ---
+if ENV != "prod":
+    @app.get("/debug/invite-logs/{invoice_id}")
+    def debug_invite_logs(invoice_id: str):
+        # menampilkan log pengiriman undangan untuk 1 invoice
+        # membutuhkan storage.list_invite_logs(invoice_id)
+        return {"invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
+
+    @app.get("/debug/invoices")
+    def debug_invoices(limit: int = 20):
+        # menampilkan daftar invoice terbaru
+        # membutuhkan storage.list_invoices(limit)
+        return {"items": storage.list_invoices(limit)}
+
+    class DebugInviteIn(BaseModel):
+        user_id: int
+        group_id: str
+
+    @app.post("/debug/send-invite")
+    async def debug_send_invite(payload: DebugInviteIn):
+        # panggil fungsi kirim undangan secara manual untuk uji cepat
+        invite_url = await send_invite_link(bot_app, payload.user_id, payload.group_id)
+        return {"ok": True, "invite_link": invite_url}
+
 
 # --- Startup/shutdown ---
 @app.on_event("startup")
