@@ -167,28 +167,9 @@ async def saweria_webhook(request: Request):
 def health():
     return {"ok": True}
 
-# --- Startup: set webhook ---
-# app/main.py (bagian bawah)
-
-# @app.on_event("startup")
-# async def on_start():
-#     await bot_app.initialize()
-#     base = os.getenv("BASE_URL", "").strip()
-#     if base.startswith("https://"):
-#         await bot_app.bot.set_webhook(
-#             url=f"{base}/telegram/webhook",
-#             secret_token=WEBHOOK_SECRET
-#         )
-#     else:
-#         print("Skipping set_webhook: BASE_URL must be public https")
-
-#     # Penting: mulai PTB agar handler /start jalan
-#     await bot_app.start()
-
-# @app.on_event("shutdown")
-# async def on_stop():
-#     await bot_app.stop()
-#     await bot_app.shutdown()
+@app.get("/debug/invite-logs/{invoice_id}")
+def debug_invite_logs(invoice_id: str):
+    return {"invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
 
 # --- Startup/shutdown ---
 @app.on_event("startup")

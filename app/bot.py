@@ -41,7 +41,9 @@ async def send_invite_link(app: Application, chat_id: int, target_group_id: str)
         name="Paid join"
     )
     # sebelum send message:
-    print(f"[invite] to user={chat_id} group={target_group_id}")
+    # print(f"[invite] to user={chat_id} group={target_group_id}")
+    print(f"[invite] sending to user={chat_id} group={target_group_id}")
+
 
     await app.bot.send_message(chat_id, f"✅ Pembayaran diterima.\nBerikut link undangan kamu:\n{link.invite_link}")
 

@@ -65,3 +65,11 @@ def add_invite_log(invoice_id: str, group_id: str, invite_link: str|None, error:
     cur.execute("INSERT INTO invite_logs(invoice_id, group_id, invite_link, sent_at, error) VALUES(?,?,?,?,?)",
                 (invoice_id, group_id, invite_link, int(time.time()), error))
     conn.commit(); conn.close()
+
+def list_invite_logs(invoice_id: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT invoice_id, group_id, invite_link, sent_at, error FROM invite_logs WHERE invoice_id=? ORDER BY id DESC", (invoice_id,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
