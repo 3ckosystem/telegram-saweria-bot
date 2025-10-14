@@ -85,7 +85,6 @@ async def qr_png(invoice_id: str):
     if not inv:
         raise HTTPException(404, "Invoice not found")
 
-    # 1) Bila sudah ada qris_payload resmi dari provider:
     payload = inv.get("qris_payload")
     if isinstance(payload, str) and payload.startswith(("http://", "https://")):
         async with httpx.AsyncClient(timeout=20) as client:
@@ -93,17 +92,14 @@ async def qr_png(invoice_id: str):
         r.raise_for_status()
         return Response(content=r.content, media_type=r.headers.get("content-type", "image/png"))
 
-    # 2) Kalau belum ada resmi, buat QR yang membuka halaman Saweria
+    # kalau belum ada QRIS resmi, arahkan ke profil Saweria kamu
     if SAWERIA_USERNAME:
-        # (kalau suatu saat Saweria mendukung query message/amount, bisa ditambahkan di sini)
         qr_text = f"https://saweria.co/{SAWERIA_USERNAME}"
     else:
-        # fallback terakhir: text info (tetap bisa discan, tapi bukan pembayaran)
         qr_text = f"INV:{inv['invoice_id']} | AMT:{inv['amount']}"
 
     img = qrcode.make(qr_text)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    buf = io.BytesIO(); img.save(buf, format="PNG")
     return Response(content=buf.getvalue(), media_type="image/png")
 
 
