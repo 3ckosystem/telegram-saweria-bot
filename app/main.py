@@ -18,7 +18,7 @@ ENV = os.getenv("ENV", "dev")  # gunakan "prod" di Railway untuk mematikan debug
 
 
 # ... existing env
-SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET","")  # opsional
+SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET","")
 
 app = FastAPI()
 storage.init_db()  # <<< inisialisasi DB saat start
@@ -104,16 +104,15 @@ async def qr_png(invoice_id: str):
 
 # --- Saweria Webhook ---
 class SaweriaWebhookIn(BaseModel):
-    invoice_id: str
+    invoice_id: str | None = None
+    external_id: str | None = None
     status: str
 
 def verify_saweria_signature(req: Request, raw_body: bytes):
-    # Contoh: jika Saweria kirim header 'X-Saweria-Signature' dengan HMAC-SHA256
     if not SAWERIA_WEBHOOK_SECRET:
         return True
-    sig_hdr = req.headers.get("X-Saweria-Signature")
-    if not sig_hdr:
-        return False
+    sig_hdr = req.headers.get("X-Saweria-Signature")  # GANTI sesuai dokumentasi
+    if not sig_hdr: return False
     calc = hmac.new(SAWERIA_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(calc, sig_hdr)
 
@@ -127,16 +126,19 @@ async def saweria_webhook(request: Request):
     if data.status.lower() != "paid":
         return {"ok": True}
 
-    inv = payments.mark_paid(data.invoice_id)
+    inv_id = data.external_id or data.invoice_id
+    if not inv_id:
+        raise HTTPException(400, "Missing invoice reference")
+
+    inv = payments.mark_paid(inv_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
 
     groups = json.loads(inv["groups_json"])
-    # kirim undangan per grup (dengan penanganan error)
     for gid in groups:
         try:
-            await send_invite_link(bot_app, inv["user_id"], gid)
-            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-bot)", None)
+            invite_url = await send_invite_link(bot_app, inv["user_id"], gid)
+            storage.add_invite_log(inv["invoice_id"], gid, invite_url, None)
         except Exception as e:
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
     return {"ok": True}
