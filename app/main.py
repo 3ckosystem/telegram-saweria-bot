@@ -1,47 +1,32 @@
-import os, json, hmac, hashlib
+import os, json, hmac, hashlib, io
 from telegram import Update
+from telegram.ext import Application
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from telegram.ext import Application
+import qrcode, httpx
+
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
-import qrcode, io, httpx
 
+# --- ENV ---
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET","")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 BASE_URL = os.environ["BASE_URL"]
-GROUPS = json.loads(os.environ.get("GROUP_IDS_JSON","[]"))
+GROUPS = json.loads(os.environ.get("GROUP_IDS_JSON", "[]"))
+ENV = os.getenv("ENV", "dev")
+SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET", "")
 
-ENV = os.getenv("ENV", "dev")  # gunakan "prod" di Railway untuk mematikan debug endpoints
-
-
-# ... existing env
-SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET","")
-
+# --- APP & BOT ---
 app = FastAPI()
-storage.init_db()  # <<< inisialisasi DB saat start
+app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
+
+storage.init_db()  # init DB on start
 bot_app: Application = build_app()
 register_handlers(bot_app)
 
-# --- Serve Mini App static ---
-app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
-
-# --- Telegram webhook endpoint ---
-# @app.post("/telegram/webhook")
-# @app.post("/telegram/webhook")
-# async def telegram_webhook(request: Request):
-#     # Validasi secret dari Telegram
-#     if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
-#         raise HTTPException(403, "Invalid secret")
-
-#     data = await request.json()
-#     update = Update.de_json(data, bot_app.bot)
-#     await bot_app.process_update(update)
-#     return JSONResponse({"ok": True})
-
-# --- Webhook Telegram: process_update langsung ---
+# ---------------- Telegram webhook ----------------
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
     if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
@@ -51,7 +36,7 @@ async def telegram_webhook(request: Request):
     await bot_app.process_update(update)
     return JSONResponse({"ok": True})
 
-# --- API create invoice ---
+# ---------------- Create invoice ----------------
 class CreateInvoiceIn(BaseModel):
     user_id: int
     groups: list[str]
@@ -59,25 +44,39 @@ class CreateInvoiceIn(BaseModel):
 
 @app.post("/api/invoice")
 async def create_invoice(payload: CreateInvoiceIn):
-    # Robust ke dua bentuk GROUPS: [{"id":"...","label":"..."}] ATAU ["-100...", "-100..."]
-    try:
-        valid = {
-            (g["id"] if isinstance(g, dict) and "id" in g else str(g))
-            for g in GROUPS
-        }
-    except Exception:
-        valid = set()  # fallback aman
+    # dukung dua format GROUPS: [{"id":"...","label":"..."}] ATAU ["-100...", "-100..."]
+    valid = set()
+    for g in GROUPS:
+        if isinstance(g, dict) and "id" in g:
+            valid.add(str(g["id"]))
+        else:
+            valid.add(str(g))
 
     for gid in payload.groups:
         if gid not in valid:
             raise HTTPException(400, f"Invalid group {gid}")
 
-    # PENTING: gunakan await karena payments.create_invoice itu async
+    # PENTING: payments.create_invoice adalah async → harus di-await
     inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
     return inv
 
+# ---------------- Get invoice (INI YANG KURANG) ----------------
+@app.get("/api/invoice/{invoice_id}")
+def get_invoice(invoice_id: str):
+    inv = payments.get_invoice(invoice_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    return {
+        "invoice_id": inv["invoice_id"],
+        "user_id": inv["user_id"],
+        "groups": json.loads(inv["groups_json"]),
+        "amount": inv["amount"],
+        "status": inv["status"],
+        "created_at": inv["created_at"],
+        "paid_at": inv.get("paid_at"),
+    }
 
-# --- API cek status invoice ---
+# ---------------- QR PNG (satu-satunya, tidak duplikat) ----------------
 @app.get("/api/qr/{invoice_id}")
 async def qr_png(invoice_id: str):
     inv = payments.get_invoice(invoice_id)
@@ -85,29 +84,31 @@ async def qr_png(invoice_id: str):
         raise HTTPException(404, "Invoice not found")
     payload = inv.get("qris_payload") or f"INV:{inv['invoice_id']}|AMT:{inv['amount']}"
 
-    # Jika payload sudah berupa URL gambar dari Saweria, langsung proxy
+    # Jika payload adalah URL gambar dari provider, proxy-kan
     if isinstance(payload, str) and payload.startswith(("http://", "https://")):
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.get(payload)
         r.raise_for_status()
         return Response(content=r.content, media_type=r.headers.get("content-type", "image/png"))
 
-    # Selain itu, anggap payload adalah QRIS string → generate PNG
+    # Selain itu, treat sebagai QRIS string → generate PNG
     img = qrcode.make(payload)
-    buf = io.BytesIO(); img.save(buf, format="PNG")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
     return Response(content=buf.getvalue(), media_type="image/png")
 
-# --- Saweria Webhook ---
+# ---------------- Saweria webhook ----------------
 class SaweriaWebhookIn(BaseModel):
     invoice_id: str | None = None
     external_id: str | None = None
     status: str
 
-def verify_saweria_signature(req: Request, raw_body: bytes):
+def verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
     if not SAWERIA_WEBHOOK_SECRET:
-        return True
-    sig_hdr = req.headers.get("X-Saweria-Signature")  # GANTI sesuai dokumentasi
-    if not sig_hdr: return False
+        return True  # skip verification jika tidak dipakai
+    sig_hdr = req.headers.get("X-Saweria-Signature")  # sesuaikan dengan dokumentasi resmi
+    if not sig_hdr:
+        return False
     calc = hmac.new(SAWERIA_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(calc, sig_hdr)
 
@@ -121,46 +122,37 @@ async def saweria_webhook(request: Request):
     if data.status.lower() != "paid":
         return {"ok": True}
 
-    inv = payments.mark_paid(data.invoice_id)
+    # Pakai external_id kalau ada; fallback ke invoice_id
+    ref_id = data.external_id or data.invoice_id
+    if not ref_id:
+        raise HTTPException(400, "Missing invoice reference")
+
+    inv = payments.mark_paid(ref_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
 
     groups = json.loads(inv["groups_json"])
-    # kirim undangan per grup (dengan penanganan error)
     for gid in groups:
         try:
-            await send_invite_link(bot_app, inv["user_id"], gid)
-            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-bot)", None)
+            invite_url = await send_invite_link(bot_app, inv["user_id"], gid)
+            storage.add_invite_log(inv["invoice_id"], gid, invite_url, None)
         except Exception as e:
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
     return {"ok": True}
 
-# --- Health ---
-# @app.get("/")
-# def root():
-#     return {"ok": True}
-
-# --- Healthcheck sederhana ---
+# ---------------- Health ----------------
 @app.get("/health")
 def health():
     return {"ok": True}
 
-@app.get("/debug/invite-logs/{invoice_id}")
-def debug_invite_logs(invoice_id: str):
-    return {"invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
-
-# --- DEBUG ENDPOINTS (AKTIF SAAT ENV != "prod") ---
+# ---------------- DEBUG (aktif hanya saat ENV != prod) ----------------
 if ENV != "prod":
     @app.get("/debug/invite-logs/{invoice_id}")
     def debug_invite_logs(invoice_id: str):
-        # menampilkan log pengiriman undangan untuk 1 invoice
-        # membutuhkan storage.list_invite_logs(invoice_id)
         return {"invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
 
     @app.get("/debug/invoices")
     def debug_invoices(limit: int = 20):
-        # menampilkan daftar invoice terbaru
-        # membutuhkan storage.list_invoices(limit)
         return {"items": storage.list_invoices(limit)}
 
     class DebugInviteIn(BaseModel):
@@ -169,28 +161,14 @@ if ENV != "prod":
 
     @app.post("/debug/send-invite")
     async def debug_send_invite(payload: DebugInviteIn):
-        # panggil fungsi kirim undangan secara manual untuk uji cepat
         invite_url = await send_invite_link(bot_app, payload.user_id, payload.group_id)
         return {"ok": True, "invite_link": invite_url}
 
-@app.get("/api/qr/{invoice_id}")
-def qr_png(invoice_id: str):
-    inv = payments.get_invoice(invoice_id)
-    if not inv:
-        raise HTTPException(404, "Invoice not found")
-    # bikin payload sederhana; nanti bisa diganti QR string resmi dari Saweria
-    payload = f"INV:{inv['invoice_id']}|AMT:{inv['amount']}"
-    img = qrcode.make(payload)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return Response(content=buf.getvalue(), media_type="image/png")
-
-
-# --- Startup/shutdown ---
+# ---------------- Startup/shutdown ----------------
 @app.on_event("startup")
 async def on_start():
     await bot_app.initialize()
-    base = os.getenv("BASE_URL", "").strip()
+    base = (BASE_URL or "").strip()
     if base.startswith("https://"):
         await bot_app.bot.set_webhook(
             url=f"{base}/telegram/webhook",
@@ -204,5 +182,3 @@ async def on_start():
 async def on_stop():
     await bot_app.stop()
     await bot_app.shutdown()
-
-
