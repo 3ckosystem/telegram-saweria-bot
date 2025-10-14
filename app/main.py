@@ -99,9 +99,15 @@ async def qr_png(invoice_id: str):
 
 # ---------------- Saweria webhook ----------------
 class SaweriaWebhookIn(BaseModel):
-    invoice_id: str | None = None
-    external_id: str | None = None
+    invoice_id: str | None = None      # beberapa implementasi kirim 'invoice_id'
+    external_id: str | None = None     # kalau kamu kirim via API (saat ini tidak)
     status: str
+    id: str | None = None              # id transaksi dari Saweria (opsional)
+    message: str | None = None         # PENTING: pesan donasi (tempat kita menaruh INV:<uuid>)
+    amount_raw: int | None = None
+
+import re
+INV_RE = re.compile(r"\bINV:([a-f0-9-]{36})\b", re.IGNORECASE)
 
 def verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
     if not SAWERIA_WEBHOOK_SECRET:
@@ -122,10 +128,18 @@ async def saweria_webhook(request: Request):
     if data.status.lower() != "paid":
         return {"ok": True}
 
-    # Pakai external_id kalau ada; fallback ke invoice_id
+    # 1) pakai external_id/invoice_id jika ada
     ref_id = data.external_id or data.invoice_id
+
+    # 2) kalau kosong, coba ambil dari message: "… INV:<uuid> …"
+    if not ref_id and data.message:
+        m = INV_RE.search(data.message)
+        if m:
+            ref_id = m.group(1)
+
     if not ref_id:
-        raise HTTPException(400, "Missing invoice reference")
+        # tidak bisa cocokkan transaksi dengan invoice kita
+        raise HTTPException(400, "Missing invoice reference (external_id/invoice_id/message INV:<id>)")
 
     inv = payments.mark_paid(ref_id)
     if not inv:
