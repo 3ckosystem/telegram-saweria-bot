@@ -3,7 +3,7 @@ const tg = window.Telegram.WebApp;
 tg.expand();
 
 // GANTI dengan username kamu
-const yourSaweriaUrl = "https://saweria.co/<username_kamu>";
+const yourSaweriaUrl = "https://saweria.co/3ckosystem";
 
 function getUserId() {
   const fromInit = tg?.initDataUnsafe?.user?.id;
