@@ -40,8 +40,10 @@ document.getElementById('pay').onclick = async () => {
 
   // Tampilkan QR (di produksi: render image QR dari Saweria)
   document.getElementById('qr').innerHTML = `
-    <div><b>Scan QRIS berikut:</b></div>
-    <pre style="white-space:pre-wrap;border:1px solid #ddd;padding:8px">${inv.qr}</pre>
-    <small>Setelah paid, bot akan kirim link undangan ke chat kamu.</small>
-  `;
+  <div><b>Scan QRIS:</b></div>
+  <img alt="QRIS" style="max-width:240px;border:1px solid #eee;padding:6px;border-radius:8px"
+       src="/api/qr/${inv.invoice_id}" />
+  <div style="margin-top:6px"><small>Setelah pembayaran, bot akan kirim link undangan.</small></div>
+`;
+
 };
