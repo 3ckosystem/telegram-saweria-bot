@@ -1,20 +1,12 @@
-# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
-
-# Env & creds
 .env
 .env.*
 !.env.example
-
-# Node (kalau Mini App pakai npm)
 node_modules/
 dist/
 build/
-
-# OS/editor
 .DS_Store
 .vscode/
-EOF
