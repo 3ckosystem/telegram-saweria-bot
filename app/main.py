@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from telegram.ext import Application
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
+import qrcode, io
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET","")
@@ -186,6 +187,18 @@ if ENV != "prod":
         # panggil fungsi kirim undangan secara manual untuk uji cepat
         invite_url = await send_invite_link(bot_app, payload.user_id, payload.group_id)
         return {"ok": True, "invite_link": invite_url}
+
+@app.get("/api/qr/{invoice_id}")
+def qr_png(invoice_id: str):
+    inv = payments.get_invoice(invoice_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    # bikin payload sederhana; nanti bisa diganti QR string resmi dari Saweria
+    payload = f"INV:{inv['invoice_id']}|AMT:{inv['amount']}"
+    img = qrcode.make(payload)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 
 # --- Startup/shutdown ---
