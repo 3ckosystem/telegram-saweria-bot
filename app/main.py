@@ -17,6 +17,8 @@ BASE_URL = os.environ["BASE_URL"]
 GROUPS = json.loads(os.environ.get("GROUP_IDS_JSON", "[]"))
 ENV = os.getenv("ENV", "dev")
 SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET", "")
+SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "")
+
 
 # --- APP & BOT ---
 app = FastAPI()
@@ -82,20 +84,28 @@ async def qr_png(invoice_id: str):
     inv = payments.get_invoice(invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    payload = inv.get("qris_payload") or f"INV:{inv['invoice_id']}|AMT:{inv['amount']}"
 
-    # Jika payload adalah URL gambar dari provider, proxy-kan
+    # 1) Bila sudah ada qris_payload resmi dari provider:
+    payload = inv.get("qris_payload")
     if isinstance(payload, str) and payload.startswith(("http://", "https://")):
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.get(payload)
         r.raise_for_status()
         return Response(content=r.content, media_type=r.headers.get("content-type", "image/png"))
 
-    # Selain itu, treat sebagai QRIS string → generate PNG
-    img = qrcode.make(payload)
+    # 2) Kalau belum ada resmi, buat QR yang membuka halaman Saweria
+    if SAWERIA_USERNAME:
+        # (kalau suatu saat Saweria mendukung query message/amount, bisa ditambahkan di sini)
+        qr_text = f"https://saweria.co/{SAWERIA_USERNAME}"
+    else:
+        # fallback terakhir: text info (tetap bisa discan, tapi bukan pembayaran)
+        qr_text = f"INV:{inv['invoice_id']} | AMT:{inv['amount']}"
+
+    img = qrcode.make(qr_text)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return Response(content=buf.getvalue(), media_type="image/png")
+
 
 # ---------------- Saweria webhook ----------------
 class SaweriaWebhookIn(BaseModel):
