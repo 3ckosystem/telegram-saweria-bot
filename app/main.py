@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from telegram.ext import Application
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
-import qrcode, io
+import qrcode, io, httpx
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET","")
@@ -83,33 +83,24 @@ async def create_invoice(payload: CreateInvoiceIn):
     return inv
 
 # --- API cek status invoice ---
-@app.get("/api/invoice/{invoice_id}")
-def get_invoice(invoice_id: str):
+@app.get("/api/qr/{invoice_id}")
+async def qr_png(invoice_id: str):
     inv = payments.get_invoice(invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    # normalisasi
-    inv["groups"] = json.loads(inv["groups_json"]); inv.pop("groups_json", None)
-    return inv
+    payload = inv.get("qris_payload") or f"INV:{inv['invoice_id']}|AMT:{inv['amount']}"
 
-# --- Saweria Webhook ---
-# class SaweriaWebhookIn(BaseModel):
-#     # Sesuaikan dengan payload webhook Saweria (lihat referensi)
-#     invoice_id: str
-#     status: str
+    # Jika payload sudah berupa URL gambar dari Saweria, langsung proxy
+    if isinstance(payload, str) and payload.startswith(("http://", "https://")):
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(payload)
+        r.raise_for_status()
+        return Response(content=r.content, media_type=r.headers.get("content-type", "image/png"))
 
-# @app.post("/api/saweria/webhook")
-# async def saweria_webhook(data: SaweriaWebhookIn):
-#     # Verifikasi signature kalau tersedia (opsional)
-#     if data.status.lower() != "paid":
-#         return {"ok": True}
-#     inv = payments.mark_paid(data.invoice_id)
-#     if not inv:
-#         raise HTTPException(404, "Invoice not found")
-#     # Kirim invite link untuk tiap grup
-#     for gid in inv["groups"]:
-#         await send_invite_link(bot_app, inv["user_id"], gid)  # bot_app -> ContextTypes via shortcut
-#     return {"ok": True}
+    # Selain itu, anggap payload adalah QRIS string → generate PNG
+    img = qrcode.make(payload)
+    buf = io.BytesIO(); img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 # --- Saweria Webhook ---
 class SaweriaWebhookIn(BaseModel):
