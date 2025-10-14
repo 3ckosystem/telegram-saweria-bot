@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from telegram.ext import Application
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments
+from telegram import Update
+
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET","")
@@ -21,12 +23,17 @@ app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webap
 
 # --- Telegram webhook endpoint ---
 @app.post("/telegram/webhook")
+@app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
+    # Validasi secret dari Telegram
     if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
         raise HTTPException(403, "Invalid secret")
-    update = await request.json()
-    await bot_app.update_queue.put(update)
+
+    data = await request.json()
+    update = Update.de_json(data, bot_app.bot)
+    await bot_app.process_update(update)
     return JSONResponse({"ok": True})
+
 
 # --- Mini App API: create invoice ---
 class CreateInvoiceIn(BaseModel):
@@ -69,10 +76,26 @@ def root():
     return {"ok": True}
 
 # --- Startup: set webhook ---
+# app/main.py (bagian bawah)
+
 @app.on_event("startup")
 async def on_start():
     await bot_app.initialize()
-    await bot_app.bot.set_webhook(
-        url=f"{BASE_URL}/telegram/webhook",
-        secret_token=WEBHOOK_SECRET
-    )
+    base = os.getenv("BASE_URL", "").strip()
+    if base.startswith("https://"):
+        await bot_app.bot.set_webhook(
+            url=f"{base}/telegram/webhook",
+            secret_token=WEBHOOK_SECRET
+        )
+    else:
+        print("Skipping set_webhook: BASE_URL must be public https")
+
+    # Penting: mulai PTB agar handler /start jalan
+    await bot_app.start()
+
+@app.on_event("shutdown")
+async def on_stop():
+    await bot_app.stop()
+    await bot_app.shutdown()
+
+
