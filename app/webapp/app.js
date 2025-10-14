@@ -9,8 +9,9 @@ async function renderGroups() {
   const res = await fetch(window.location.origin + '/');
   // Lewatkan; di produksi kirim array groups via SSR atau endpoint khusus
   const groups = (window.injectedGroups || [
-    {id: "-100123456", label:"Group A"},
-    {id: "-1007891011", label:"Group B"},
+    {id: "-1002593237267", label:"Group M"},
+    {id: "-1001320707949", label:"Group A"},
+    {id: "-1002306015599", label:"Group S"},
   ]);
   const wrap = document.getElementById('groups');
   groups.forEach(g=>{
