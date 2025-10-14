@@ -79,5 +79,10 @@ def list_invite_logs(invoice_id: str):
 
 def update_qris_payload(invoice_id: str, payload: str):
     conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("ALTER TABLE invoices ADD COLUMN qris_payload TEXT;")
+    except Exception:
+        pass
     cur.execute("UPDATE invoices SET qris_payload=? WHERE invoice_id=?", (payload, invoice_id))
     conn.commit(); conn.close()
+

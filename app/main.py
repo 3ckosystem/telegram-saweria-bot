@@ -51,22 +51,6 @@ async def telegram_webhook(request: Request):
     await bot_app.process_update(update)
     return JSONResponse({"ok": True})
 
-# --- Mini App API: create invoice ---
-# class CreateInvoiceIn(BaseModel):
-#     user_id: int
-#     groups: list[str]
-#     amount: int
-
-# @app.post("/api/invoice")
-# async def create_invoice(payload: CreateInvoiceIn):
-#     # Validasi grup
-#     valid = {g["id"] for g in GROUPS}
-#     for gid in payload.groups:
-#         if gid not in valid:
-#             raise HTTPException(400, f"Invalid group {gid}")
-#     inv = payments.create_invoice(payload.user_id, payload.groups, payload.amount)
-#     return inv
-
 # --- API create invoice ---
 class CreateInvoiceIn(BaseModel):
     user_id: int
@@ -75,12 +59,23 @@ class CreateInvoiceIn(BaseModel):
 
 @app.post("/api/invoice")
 async def create_invoice(payload: CreateInvoiceIn):
-    valid = {g["id"] for g in GROUPS}
+    # Robust ke dua bentuk GROUPS: [{"id":"...","label":"..."}] ATAU ["-100...", "-100..."]
+    try:
+        valid = {
+            (g["id"] if isinstance(g, dict) and "id" in g else str(g))
+            for g in GROUPS
+        }
+    except Exception:
+        valid = set()  # fallback aman
+
     for gid in payload.groups:
         if gid not in valid:
             raise HTTPException(400, f"Invalid group {gid}")
-    inv = payments.create_invoice(payload.user_id, payload.groups, payload.amount)
+
+    # PENTING: gunakan await karena payments.create_invoice itu async
+    inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
     return inv
+
 
 # --- API cek status invoice ---
 @app.get("/api/qr/{invoice_id}")
@@ -126,19 +121,16 @@ async def saweria_webhook(request: Request):
     if data.status.lower() != "paid":
         return {"ok": True}
 
-    inv_id = data.external_id or data.invoice_id
-    if not inv_id:
-        raise HTTPException(400, "Missing invoice reference")
-
-    inv = payments.mark_paid(inv_id)
+    inv = payments.mark_paid(data.invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
 
     groups = json.loads(inv["groups_json"])
+    # kirim undangan per grup (dengan penanganan error)
     for gid in groups:
         try:
-            invite_url = await send_invite_link(bot_app, inv["user_id"], gid)
-            storage.add_invite_log(inv["invoice_id"], gid, invite_url, None)
+            await send_invite_link(bot_app, inv["user_id"], gid)
+            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-bot)", None)
         except Exception as e:
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
     return {"ok": True}
