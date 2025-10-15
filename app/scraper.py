@@ -66,8 +66,11 @@ async def _try_click(page: Page | Frame, selectors, timeout_each=1800) -> bool:
 
 # ---------- isi form publik TANPA submit ----------
 async def _fill_without_submit(page: Page, amount: int, message: str, method: str):
-    # amount
-    amt = await page.wait_for_selector('input[type="number"], input[name="amount"]', timeout=8000)
+    # ===== amount =====
+    amt = await page.wait_for_selector(
+        'input[name="amount"], input[type="number"]',
+        timeout=8000
+    )
     await amt.scroll_into_view_if_needed()
     await amt.click()
     try: await page.keyboard.press("Control+A")
@@ -76,64 +79,105 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
     await amt.type(str(amount))
     print("[scraper] filled amount")
 
-    # name
-    name_val = "user"
-    for sel in ['input[name="name"]','input[placeholder*="Dari" i]','input[placeholder*="nama" i]']:
+    # ===== name (Dari) =====
+    name_val = "Budi"
+    name_selectors = [
+        'input[name="name"]',
+        'input[placeholder*="Dari" i]',
+        'input[aria-label*="Dari" i]',
+        'input[required][type="text"]',
+        'input[type="text"]',
+    ]
+    name_ok = False
+    for sel in name_selectors:
         try:
             el = await page.wait_for_selector(sel, timeout=1800)
-            await el.fill(name_val); print("[scraper] filled name via", sel); break
-        except: pass
+            await el.scroll_into_view_if_needed()
+            await el.click()
+            try: await page.keyboard.press("Control+A")
+            except: await page.keyboard.press("Meta+A")
+            await page.keyboard.press("Backspace")
+            await el.type(name_val)
+            print("[scraper] filled name via", sel)
+            name_ok = True
+            break
+        except:
+            pass
+    if not name_ok:
+        print("[scraper] WARN: name field not found")
 
-    # email (acak agar unik)
+    # ===== email =====
     email_val = f"donor+{uuid.uuid4().hex[:8]}@example.com"
     for sel in ['input[type="email"]','input[name="email"]','input[placeholder*="email" i]']:
         try:
             el = await page.wait_for_selector(sel, timeout=1800)
-            await el.fill(email_val); print("[scraper] filled email via", sel); break
-        except: pass
-
-    # message
-    for sel in [
-        'textarea[name="message"]',
-        'textarea[placeholder*="pesan" i]',
-        'textarea',
-        '[contenteditable="true"], [contenteditable]'
-    ]:
-        try:
-            el = await page.wait_for_selector(sel, timeout=1800)
             await el.scroll_into_view_if_needed()
+            await el.fill(email_val)
+            print("[scraper] filled email via", sel)
+            break
+        except:
+            pass
+
+    # ===== message (Pesan) =====
+    msg_selectors = [
+        'textarea[name="message"]',
+        'textarea[placeholder*="Pesan" i]',
+        'textarea[required]',
+        'textarea',
+        '[contenteditable="true"], [contenteditable]',
+    ]
+    msg_ok = False
+    for sel in msg_selectors:
+        try:
+            el = await page.wait_for_selector(sel, timeout=2000)
+            await el.scroll_into_view_if_needed()
+            await el.click()
+            # beberapa tema tidak menerima .fill() pada contenteditable
             try:
                 await el.fill(message)
             except:
-                await el.click(); await page.keyboard.type(message)
-            print("[scraper] filled message via", sel); break
-        except: pass
+                await page.keyboard.type(message)
+            print("[scraper] filled message via", sel)
+            msg_ok = True
+            break
+        except:
+            pass
+    if not msg_ok:
+        print("[scraper] WARN: message field not found")
 
-    # centang checkbox (kalau ada)
-    for text in ["17 tahun", "menyetujui", "kebijakan privasi"]:
+    # ===== centang checkbox wajib =====
+    for text in ["17 tahun", "menyetujui", "kebijakan privasi", "ketentuan"]:
         try:
             node = page.get_by_text(re.compile(text, re.I))
             await node.scroll_into_view_if_needed()
             await node.click()
             print("[scraper] checked:", text)
-        except: pass
+        except:
+            pass
 
-    # pilih metode (GoPay default)
+    # ===== pilih metode (GoPay default) =====
     method = (method or "gopay").lower()
     if method == "gopay":
         ok = await _try_click(page, [
-            'button:has-text("gopay")','[role="radio"]:has-text("gopay")',
-            '[data-testid*="gopay"]','text=/\\bgopay\\b/i'
+            'button:has-text("gopay")',
+            '[role="radio"]:has-text("gopay")',
+            '[data-testid*="gopay"]',
+            'text=/\\bgopay\\b/i'
         ])
-        if not ok: print("[scraper] WARN: gopay tab not found; continue anyway")
+        if not ok:
+            print("[scraper] WARN: gopay tab not found; continue anyway")
     else:
         ok = await _try_click(page, [
-            'button:has-text("QRIS")','[role="radio"]:has-text("QRIS")',
-            '[data-testid*="qris"]','text=/\\bQRIS\\b/i'
+            'button:has-text("QRIS")',
+            '[role="radio"]:has-text("QRIS")',
+            '[data-testid*="qris"]',
+            'text=/\\bQRIS\\b/i'
         ])
-        if not ok: print("[scraper] WARN: qris tab not found; continue anyway")
+        if not ok:
+            print("[scraper] WARN: qris tab not found; continue anyway")
 
-    # TIDAK menekan submit. Selesai di sini.
+    # TIDAK submit — berhenti di sini
+
 
 
 # ---------- entrypoint yang dipanggil payments.create_invoice ----------
