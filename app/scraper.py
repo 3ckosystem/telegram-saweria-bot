@@ -10,6 +10,7 @@ SCRAPER_PAYMENT_METHOD = os.getenv("SCRAPER_PAYMENT_METHOD", "qris").lower()
 
 PROFILE_URL = f"https://saweria.co/{SAWERIA_USERNAME}"
 
+# -------------------- helpers: login --------------------
 async def _login_with_cookie(context):
     if not SAWERIA_SESSION:
         return False
@@ -17,46 +18,125 @@ async def _login_with_cookie(context):
         "name": "_session", "value": SAWERIA_SESSION,
         "domain": "saweria.co", "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax"
     }])
+    print("[scraper] cookie session applied")
     return True
 
 async def _login_with_form(page):
+    print("[scraper] login via form")
     await page.goto("https://saweria.co/auth/login", wait_until="domcontentloaded")
     await page.fill('input[type="email"]', SAWERIA_EMAIL)
     await page.fill('input[type="password"]', SAWERIA_PASSWORD)
-    await page.click('button:has-text("Masuk"), button:has-text("Login")')
+    for sel in ['button:has-text("Masuk")', 'button:has-text("Login")', 'text=/Masuk|Login/i']:
+        try:
+            await page.click(sel)
+            print("[scraper] clicked login via", sel)
+            break
+        except:
+            pass
     await page.wait_for_load_state("networkidle")
 
+# -------------------- helpers: form fill --------------------
+async def _fill_amount(page, amount: int):
+    try:
+        amt = await page.wait_for_selector('input[name="amount"], input[type="number"]', timeout=5000)
+        await amt.click()
+        # select-all & clear (Windows/Mac/Linux)
+        try:
+            await page.keyboard.press("Control+A")
+        except:
+            await page.keyboard.press("Meta+A")
+        await page.keyboard.press("Backspace")
+        await amt.type(str(amount))
+        print("[scraper] filled amount")
+        return True
+    except Exception as e:
+        print("[scraper] ERROR filling amount:", e)
+        return False
+
+async def _reveal_message_box_if_hidden(page):
+    # buka toggle "Tulis/Tambahkan pesan" jika ada
+    for sel in [
+        'button:has-text("Pesan")',
+        'button:has-text("Tambah")',
+        'text=/Tulis pesan/i',
+        'text=/Tambahkan pesan/i',
+        '[data-testid*="message"]:has-text("Tambah")',
+    ]:
+        try:
+            el = await page.wait_for_selector(sel, timeout=1200)
+            await el.click()
+            print("[scraper] clicked message toggler via", sel)
+            break
+        except:
+            pass
+
+async def _fill_message(page, message: str) -> bool:
+    await _reveal_message_box_if_hidden(page)
+
+    # 1) coba textarea / input yang umum
+    for sel in [
+        'textarea[name="message"]',
+        'textarea[placeholder*="pesan" i]',
+        'textarea',
+        'input[name="message"]',
+        'input[placeholder*="pesan" i]',
+    ]:
+        try:
+            el = await page.wait_for_selector(sel, timeout=1500)
+            await el.fill(message)
+            print("[scraper] filled message via", sel)
+            return True
+        except:
+            pass
+
+    # 2) contenteditable (type manual)
+    try:
+        el = await page.wait_for_selector('[contenteditable="true"], [contenteditable]', timeout=1500)
+        await el.click()
+        await page.keyboard.type(message)
+        print("[scraper] typed message into contenteditable")
+        return True
+    except:
+        pass
+
+    print("[scraper] WARN: message field not found")
+    return False
+
+# -------------------- helpers: payment method --------------------
 async def _choose_payment_method(page, method: str):
-    method = method.lower()
+    method = (method or "").lower()
     if method == "gopay":
-        # Coba beberapa selector yang mungkin:
         for sel in [
             'button:has-text("GoPay")',
             '[data-testid="payment-gopay"]',
             '[role="tab"]:has-text("GoPay")',
-            'img[alt*="GoPay"]',        # kadang ikon klik-able
-        ]:
-            try:
-                el = await page.wait_for_selector(sel, timeout=2000)
-                await el.click()
-                return
-            except:
-                pass
-        # jika gagal, biarkan default (akan tetap coba ambil QR umum)
-    else:
-        # QRIS (default) — biasanya sudah aktif; tetap coba klik kalau tersedia
-        for sel in [
-            'button:has-text("QRIS")',
-            '[data-testid="payment-qris"]',
-            '[role="tab"]:has-text("QRIS")',
+            'img[alt*="GoPay"]',
+            'text=GoPay',
         ]:
             try:
                 el = await page.wait_for_selector(sel, timeout=1500)
                 await el.click()
+                print("[scraper] clicked method via", sel)
+                return
+            except:
+                pass
+        print("[scraper] WARN: GoPay tab not found, continue anyway")
+    else:
+        for sel in [
+            'button:has-text("QRIS")',
+            '[data-testid="payment-qris"]',
+            '[role="tab"]:has-text("QRIS")',
+            'text=QRIS',
+        ]:
+            try:
+                el = await page.wait_for_selector(sel, timeout=1200)
+                await el.click()
+                print("[scraper] clicked method via", sel)
                 return
             except:
                 pass
 
+# -------------------- main: fetch QR/visual --------------------
 async def fetch_qr_png(amount: int, message: str, method: str | None = None) -> bytes | None:
     method = (method or SCRAPER_PAYMENT_METHOD).lower()
     async with async_playwright() as p:
@@ -70,70 +150,59 @@ async def fetch_qr_png(amount: int, message: str, method: str | None = None) -> 
             await _login_with_form(page)
             await page.goto(PROFILE_URL, wait_until="networkidle")
 
-        # Nominal
-        try:
-            await page.fill('input[name="amount"]', str(amount))
-        except:
-            amt = await page.wait_for_selector('input[type="number"]', timeout=5000)
-            await amt.fill(str(amount))
+        # isi nominal & pesan
+        if not await _fill_amount(page, amount):
+            raise RuntimeError("Amount field not found")
+        msg_ok = await _fill_message(page, message)
+        if not msg_ok:
+            # Kalau pesan wajib agar webhook bisa deteksi INV, sebaiknya raise:
+            # raise RuntimeError("Message field not found")
+            pass
 
-        # Pesan
-        try:
-            await page.fill('textarea[name="message"]', message)
-        except:
-            await page.locator('[contenteditable="true"]').first.fill(message)
-
-        # Pilih metode (GoPay / QRIS)
+        # pilih metode
         await _choose_payment_method(page, method)
 
-        # Klik tombol bayar/donate
-        try:
-            await page.click('button:has-text("Bayar")')
-        except:
-            await page.click('button:has-text("Donate")')
+        # klik bayar/donate
+        clicked = False
+        for sel in ['button:has-text("Bayar")', 'button:has-text("Donate")', 'text=Bayar', 'text=Donate']:
+            try:
+                await page.click(sel)
+                print("[scraper] clicked pay via", sel)
+                clicked = True
+                break
+            except:
+                pass
+        if not clicked:
+            print("[scraper] WARN: pay button not found; trying to proceed anyway")
 
-        # Tunggu tampilan pembayaran
-        # Untuk GoPay, bisa muncul: QR GoPay, kode, atau tombol "Buka GoPay"
+        # tunggu tampilan pembayaran (QR / deeplink / tombol buka)
         qr_el = None
-        candidate_selectors = []
-        if method == "gopay":
-            candidate_selectors = [
-                'img[alt*="GoPay"]',
-                'img[src*="gopay"]',
-                'img[src^="data:image"]',
-                'canvas',
-                '[data-testid="qrcode"]',
-                '[class*="qrcode"] img',
-                'a[href^="gopay://"]',  # deeplink (kalau ada)
-                'button:has-text("Buka GoPay")',
-            ]
-        else:
-            candidate_selectors = [
-                'img[alt="QRIS"]',
-                'img[alt*="QR"]',
-                'img[src^="data:image"]',
-                'canvas',
-                '[data-testid="qrcode"]',
-            ]
-
-        # Cari elemen visual QR/aksi
-        for sel in candidate_selectors:
+        candidates = (
+            ['img[alt*="GoPay"]','img[src*="gopay"]','img[src^="data:image"]','canvas',
+             '[data-testid*="qr"]','[class*="qr"] img','a[href^="gopay://"]','button:has-text("Buka GoPay")']
+            if method == "gopay" else
+            ['img[alt="QRIS"]','img[alt*="QR"]','img[src^="data:image"]','canvas',
+             '[data-testid*="qr"]','[class*="qr"] img']
+        )
+        for sel in candidates:
             try:
                 qr_el = await page.wait_for_selector(sel, timeout=10000)
+                print("[scraper] found pay element via", sel)
                 if qr_el:
                     break
             except:
                 pass
 
-        # Ambil PNG
+        # ambil PNG
         if qr_el:
             try:
                 png = await qr_el.screenshot()
             except:
                 png = await page.screenshot(full_page=False)
         else:
-            # fallback: screenshot modal/halaman
             png = await page.screenshot(full_page=False)
+            print("[scraper] WARN: fallback full-page screenshot")
 
+        print("[scraper] captured PNG bytes:", len(png))
         await context.close(); await browser.close()
         return png
