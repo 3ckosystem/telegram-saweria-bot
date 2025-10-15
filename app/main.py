@@ -16,6 +16,7 @@ from . import payments, storage
 from .scraper import debug_snapshot
 from .scraper import debug_fill_snapshot
 from .scraper import fetch_gopay_checkout_png
+from .scraper import fetch_gopay_qr_only_png
 
 
 # ------------- ENV -------------
@@ -200,6 +201,13 @@ async def debug_saweria_pay(amount: int = 25000, msg: str = "INV:debug"):
     png = await fetch_gopay_checkout_png(amount, msg)
     if not png:
         raise HTTPException(500, "Gagal menuju halaman pembayaran")
+    return Response(content=png, media_type="image/png")
+
+@app.get("/debug/saweria-qr")
+async def debug_saweria_qr(amount: int = 25000, msg: str = "INV:qr-only"):
+    png = await fetch_gopay_qr_only_png(amount, msg)
+    if not png:
+        raise HTTPException(500, "Gagal ambil QR")
     return Response(content=png, media_type="image/png")
 
 
