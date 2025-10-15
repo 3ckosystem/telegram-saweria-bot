@@ -2,7 +2,7 @@
 import os, json, re, base64, hmac, hashlib, io, httpx
 from typing import Optional, List
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -15,8 +15,7 @@ from . import payments, storage
 
 from .scraper import debug_snapshot
 from .scraper import debug_fill_snapshot
-from .scraper import fetch_gopay_checkout_png
-from .scraper import fetch_gopay_qr_only_png
+from .scraper import fetch_gopay_qr_only_png, fetch_gopay_checkout_png
 
 
 # ------------- ENV -------------
@@ -203,13 +202,20 @@ async def debug_saweria_pay(amount: int = 25000, msg: str = "INV:debug"):
         raise HTTPException(500, "Gagal menuju halaman pembayaran")
     return Response(content=png, media_type="image/png")
 
-@app.get("/debug/saweria-qr")
+@app.get("/debug/fetch_gopay_qr_only_png")
 async def debug_fetch_gopay_qr_only_png(amount: int = 25000, msg: str = "INV:qr-only"):
     png = await fetch_gopay_qr_only_png(amount, msg)
     if not png:
         raise HTTPException(500, "Gagal ambil QR")
     return Response(content=png, media_type="image/png")
 
+# (opsional) poster checkout penuh
+@app.get("/debug/saweria-pay")
+async def debug_saweria_pay(amount: int = 25000, msg: str = "INV:tes-gopay"):
+    png = await fetch_gopay_checkout_png(amount, msg)
+    if not png:
+        raise HTTPException(500, "Gagal capture checkout")
+    return Response(content=png, media_type="image/png")
 
 
 # ------------- STARTUP / SHUTDOWN -------------
