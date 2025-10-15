@@ -3,7 +3,8 @@ import os, json, re, base64, hmac, hashlib, io, httpx
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException, Response
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
+
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -193,13 +194,6 @@ async def debug_saweria_fill(amount: int = 25000, msg: str = "INV:debug", method
     png = await debug_fill_snapshot(amount, msg, method)
     if not png:
         raise HTTPException(500, "Gagal snapshot setelah pengisian form (lihat logs)")
-    return Response(content=png, media_type="image/png")
-
-@app.get("/debug/saweria-pay")
-async def debug_saweria_pay(amount: int = 25000, msg: str = "INV:debug"):
-    png = await fetch_gopay_checkout_png(amount, msg)
-    if not png:
-        raise HTTPException(500, "Gagal menuju halaman pembayaran")
     return Response(content=png, media_type="image/png")
 
 @app.get("/debug/fetch_gopay_qr_only_png")
