@@ -1,124 +1,115 @@
-import os, json, hmac, hashlib, io
-from telegram import Update
-from telegram.ext import Application
+# app/main.py
+import os, json, re, base64, hmac, hashlib, io
+from typing import Optional, List
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import qrcode, httpx
+
+from telegram import Update
+from telegram.ext import Application
 
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
 
-# --- ENV ---
+# ------------- ENV -------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
+BASE_URL = os.environ["BASE_URL"].strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
-BASE_URL = os.environ["BASE_URL"]
-GROUPS = json.loads(os.environ.get("GROUP_IDS_JSON", "[]"))
-ENV = os.getenv("ENV", "dev")
-SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET", "")
-SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "")
+ENV = os.getenv("ENV", "dev")  # set "prod" di Railway untuk mematikan debug endpoints
+GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "[]")
+try:
+    GROUPS: List[str] = [
+        (g["id"] if isinstance(g, dict) and "id" in g else str(g))
+        for g in json.loads(GROUPS_ENV)
+    ]
+except Exception:
+    GROUPS = []
 
-
-# --- APP & BOT ---
+# ------------- APP & BOT -------------
 app = FastAPI()
-app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
+storage.init_db()
 
-storage.init_db()  # init DB on start
 bot_app: Application = build_app()
 register_handlers(bot_app)
 
-# ---------------- Telegram webhook ----------------
+# Serve Mini App statics
+app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
+
+# ------------- TELEGRAM WEBHOOK -------------
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
+    # optional secret validation
     if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
         raise HTTPException(403, "Invalid secret")
+
     data = await request.json()
     update = Update.de_json(data, bot_app.bot)
     await bot_app.process_update(update)
     return JSONResponse({"ok": True})
 
-# ---------------- Create invoice ----------------
+# ------------- MODELS -------------
 class CreateInvoiceIn(BaseModel):
     user_id: int
-    groups: list[str]
+    groups: List[str]
     amount: int
 
+# ------------- API: CREATE INVOICE -------------
 @app.post("/api/invoice")
 async def create_invoice(payload: CreateInvoiceIn):
-    # dukung dua format GROUPS: [{"id":"...","label":"..."}] ATAU ["-100...", "-100..."]
-    valid = set()
-    for g in GROUPS:
-        if isinstance(g, dict) and "id" in g:
-            valid.add(str(g["id"]))
-        else:
-            valid.add(str(g))
+    # validasi group id terhadap ENV (opsional, aman jika kosong)
+    valid = set(GROUPS) if GROUPS else None
+    if valid:
+        for gid in payload.groups:
+            if gid not in valid:
+                raise HTTPException(400, f"Invalid group {gid}")
 
-    for gid in payload.groups:
-        if gid not in valid:
-            raise HTTPException(400, f"Invalid group {gid}")
-
-    # PENTING: payments.create_invoice adalah async → harus di-await
+    # trigger invoice + background simple screenshot (via payments)
     inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
     return inv
 
-# ---------------- Get invoice (INI YANG KURANG) ----------------
-@app.get("/api/invoice/{invoice_id}")
-def get_invoice(invoice_id: str):
-    inv = payments.get_invoice(invoice_id)
-    if not inv:
-        raise HTTPException(404, "Invoice not found")
-    return {
-        "invoice_id": inv["invoice_id"],
-        "user_id": inv["user_id"],
-        "groups": json.loads(inv["groups_json"]),
-        "amount": inv["amount"],
-        "status": inv["status"],
-        "created_at": inv["created_at"],
-        "paid_at": inv.get("paid_at"),
-    }
+# ------------- API: STATUS & QR IMAGE -------------
+_DATA_URL_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$")
 
-# ---------------- QR PNG (satu-satunya, tidak duplikat) ----------------
+@app.get("/api/invoice/{invoice_id}/status")
+def invoice_status(invoice_id: str):
+    st = payments.get_status(invoice_id)
+    if not st:
+        raise HTTPException(404, "Invoice not found")
+    # contoh balikan: {"status":"PENDING"|"PAID","paid_at":..., "has_qr": true|false}
+    return st
+
 @app.get("/api/qr/{invoice_id}")
-async def qr_png(invoice_id: str):
+def qr_png(invoice_id: str):
     inv = payments.get_invoice(invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
-
     payload = inv.get("qris_payload")
-    if isinstance(payload, str) and payload.startswith(("http://", "https://")):
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.get(payload)
-        r.raise_for_status()
-        return Response(content=r.content, media_type=r.headers.get("content-type", "image/png"))
+    if not payload:
+        raise HTTPException(404, "PNG not ready")
 
-    # kalau belum ada QRIS resmi, arahkan ke profil Saweria kamu
-    if SAWERIA_USERNAME:
-        qr_text = f"https://saweria.co/{SAWERIA_USERNAME}"
-    else:
-        qr_text = f"INV:{inv['invoice_id']} | AMT:{inv['amount']}"
+    # payload disimpan sebagai data URL: data:image/png;base64,...
+    m = _DATA_URL_RE.match(payload)
+    if not m:
+        raise HTTPException(400, "Bad image payload")
+    mime, b64 = m.groups()
+    return Response(content=base64.b64decode(b64), media_type=mime)
 
-    img = qrcode.make(qr_text)
-    buf = io.BytesIO(); img.save(buf, format="PNG")
-    return Response(content=buf.getvalue(), media_type="image/png")
-
-
-# ---------------- Saweria webhook ----------------
+# ------------- SAWERIA WEBHOOK (opsional) -------------
+# Jika kamu sudah menghubungkan webhook Saweria untuk tandai pembayaran "PAID"
 class SaweriaWebhookIn(BaseModel):
-    invoice_id: str | None = None      # beberapa implementasi kirim 'invoice_id'
-    external_id: str | None = None     # kalau kamu kirim via API (saat ini tidak)
     status: str
-    id: str | None = None              # id transaksi dari Saweria (opsional)
-    message: str | None = None         # PENTING: pesan donasi (tempat kita menaruh INV:<uuid>)
-    amount_raw: int | None = None
+    invoice_id: Optional[str] = None
+    external_id: Optional[str] = None
+    message: Optional[str] = None
 
-import re
-INV_RE = re.compile(r"\bINV:([a-f0-9-]{36})\b", re.IGNORECASE)
+SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET", "")
 
-def verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
+def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
     if not SAWERIA_WEBHOOK_SECRET:
-        return True  # skip verification jika tidak dipakai
-    sig_hdr = req.headers.get("X-Saweria-Signature")  # sesuaikan dengan dokumentasi resmi
+        return True
+    sig_hdr = req.headers.get("X-Saweria-Signature")
     if not sig_hdr:
         return False
     calc = hmac.new(SAWERIA_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
@@ -127,75 +118,55 @@ def verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
 @app.post("/api/saweria/webhook")
 async def saweria_webhook(request: Request):
     raw = await request.body()
-    if not verify_saweria_signature(request, raw):
+    if not _verify_saweria_signature(request, raw):
         raise HTTPException(403, "Bad signature")
-
     data = SaweriaWebhookIn.model_validate_json(raw)
     if data.status.lower() != "paid":
         return {"ok": True}
 
-    # 1) pakai external_id/invoice_id jika ada
-    ref_id = data.external_id or data.invoice_id
-
-    # 2) kalau kosong, coba ambil dari message: "… INV:<uuid> …"
-    if not ref_id and data.message:
-        m = INV_RE.search(data.message)
-        if m:
-            ref_id = m.group(1)
-
-    if not ref_id:
-        # tidak bisa cocokkan transaksi dengan invoice kita
-        raise HTTPException(400, "Missing invoice reference (external_id/invoice_id/message INV:<id>)")
-
-    inv = payments.mark_paid(ref_id)
+    # tandai invoice paid (gunakan message atau external_id/invoice_id sesuai implementasi kamu)
+    # di contoh minimal: coba pakai invoice_id jika dikirim
+    inv = None
+    if data.invoice_id:
+        inv = payments.mark_paid(data.invoice_id)
     if not inv:
+        # kalau tidak ketemu, abaikan atau log
         raise HTTPException(404, "Invoice not found")
-
+    # kirim undangan ke semua grup terkait
     groups = json.loads(inv["groups_json"])
     for gid in groups:
         try:
-            invite_url = await send_invite_link(bot_app, inv["user_id"], gid)
-            storage.add_invite_log(inv["invoice_id"], gid, invite_url, None)
+            await send_invite_link(bot_app, inv["user_id"], gid)
+            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-bot)", None)
         except Exception as e:
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
     return {"ok": True}
 
-# ---------------- Health ----------------
+# ------------- HEALTH / DEBUG -------------
 @app.get("/health")
 def health():
     return {"ok": True}
 
-# ---------------- DEBUG (aktif hanya saat ENV != prod) ----------------
 if ENV != "prod":
+    @app.get("/debug/invoices")
+    def debug_invoices(limit: int = 20):
+        return {"items": payments.list_invoices(limit)}
+
     @app.get("/debug/invite-logs/{invoice_id}")
     def debug_invite_logs(invoice_id: str):
         return {"invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
 
-    @app.get("/debug/invoices")
-    def debug_invoices(limit: int = 20):
-        return {"items": storage.list_invoices(limit)}
-
-    class DebugInviteIn(BaseModel):
-        user_id: int
-        group_id: str
-
-    @app.post("/debug/send-invite")
-    async def debug_send_invite(payload: DebugInviteIn):
-        invite_url = await send_invite_link(bot_app, payload.user_id, payload.group_id)
-        return {"ok": True, "invite_link": invite_url}
-
-# ---------------- Startup/shutdown ----------------
+# ------------- STARTUP / SHUTDOWN -------------
 @app.on_event("startup")
 async def on_start():
     await bot_app.initialize()
-    base = (BASE_URL or "").strip()
-    if base.startswith("https://"):
+    if BASE_URL.startswith("https://"):
         await bot_app.bot.set_webhook(
-            url=f"{base}/telegram/webhook",
-            secret_token=WEBHOOK_SECRET
+            url=f"{BASE_URL}/telegram/webhook",
+            secret_token=WEBHOOK_SECRET or None,
         )
     else:
-        print("Skipping set_webhook: BASE_URL must be public https")
+        print("Skipping set_webhook: BASE_URL must start with https://")
     await bot_app.start()
 
 @app.on_event("shutdown")
