@@ -107,3 +107,5 @@ async def fetch_qr_png(amount: int, message: str, method: str | None = None) -> 
                 pass
             await context.close(); await browser.close()
             return None
+        
+        
