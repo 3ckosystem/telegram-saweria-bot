@@ -15,6 +15,7 @@ from . import payments, storage
 
 from .scraper import debug_snapshot
 from .scraper import debug_fill_snapshot
+from .scraper import fetch_gopay_checkout_png
 
 
 # ------------- ENV -------------
@@ -192,6 +193,13 @@ async def debug_saweria_fill(amount: int = 25000, msg: str = "INV:debug", method
     png = await debug_fill_snapshot(amount, msg, method)
     if not png:
         raise HTTPException(500, "Gagal snapshot setelah pengisian form (lihat logs)")
+    return Response(content=png, media_type="image/png")
+
+@app.get("/debug/saweria-pay")
+async def debug_saweria_pay(amount: int = 25000, msg: str = "INV:debug"):
+    png = await fetch_gopay_checkout_png(amount, msg)
+    if not png:
+        raise HTTPException(500, "Gagal menuju halaman pembayaran")
     return Response(content=png, media_type="image/png")
 
 

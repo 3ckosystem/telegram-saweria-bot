@@ -258,6 +258,161 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
     # selesai; TIDAK submit
     await page.wait_for_timeout(350)
 
+# ====== SUBMIT + tangkap halaman pembayaran GoPay ======
+
+async def _click_donate_and_get_checkout_page(page, context):
+    """
+    Klik "Kirim Dukungan" dan kembalikan object 'target' yang berisi:
+    - page   : Page (jika membuka tab baru / same-page nav)
+    - frame  : Frame (jika pembayaran di dalam iframe)
+    - root   : element handle panel pembayaran (opsional)
+    """
+    # calon tombol
+    donate_selectors = [
+        'button[data-testid="donate-button"]',
+        'button:has-text("Kirim Dukungan")',
+        'text=/\\bKirim\\s+Dukungan\\b/i',
+    ]
+
+    # siapkan listener new page
+    new_page_task = context.wait_for_event("page")
+
+    # klik tombol
+    clicked = False
+    for sel in donate_selectors:
+        try:
+            el = await page.wait_for_selector(sel, timeout=3000)
+            await el.scroll_into_view_if_needed()
+            await el.click()
+            print("[scraper] clicked DONATE via", sel)
+            clicked = True
+            break
+        except:
+            pass
+    if not clicked:
+        raise RuntimeError("Tombol 'Kirim Dukungan' tidak ditemukan")
+
+    # tunggu salah satu: (1) tab baru, (2) same-page nav, (3) muncul iframe
+    target_page = None
+    try:
+        target_page = await new_page_task
+    except:
+        pass
+
+    if target_page:
+        await target_page.wait_for_load_state("domcontentloaded")
+        await target_page.wait_for_load_state("networkidle")
+        print("[scraper] checkout opened in NEW TAB:", target_page.url)
+        return {"page": target_page, "frame": None, "root": None}
+
+    # coba same-page navigation
+    try:
+        await page.wait_for_load_state("networkidle", timeout=7000)
+        print("[scraper] checkout likely SAME PAGE:", page.url)
+        return {"page": page, "frame": None, "root": None}
+    except:
+        pass
+
+    # terakhir: coba iframe
+    for fr in page.frames:
+        u = (fr.url or "").lower()
+        if any(k in u for k in ["gopay","qris","xendit","midtrans","snap","checkout","pay"]):
+            print("[scraper] checkout appears in IFRAME:", u[:120])
+            return {"page": None, "frame": fr, "root": None}
+
+    # gagal menemukan target; tetap kembalikan page
+    print("[scraper] WARN: fallback to current page for checkout")
+    return {"page": page, "frame": None, "root": None}
+
+
+async def _find_qr_or_checkout_panel(node):
+    """
+    Cari elemen QR / panel checkout untuk discreenshot.
+    """
+    selectors = [
+        # gambar/canvas QR umum
+        'img[alt*="QR"]',
+        'img[src^="data:image"]',
+        '[data-testid="qrcode"] img',
+        'canvas',
+        '[class*="qrcode"] img',
+        # panel pembayaran
+        '[data-testid*="checkout" i]',
+        '[class*="checkout" i]',
+        'div:has-text("Cek status")',
+        'div:has-text("Download QRIS")',
+    ]
+    for sel in selectors:
+        try:
+            el = await node.wait_for_selector(sel, timeout=5000)
+            return el
+        except:
+            pass
+    return None
+
+
+async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
+    """
+    Alur: buka profil -> isi form -> pilih GoPay -> klik 'Kirim Dukungan'
+          -> tunggu halaman/iframe pembayaran -> screenshot QR / panel.
+    """
+    if not PROFILE_URL:
+        print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
+        return None
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox","--disable-gpu","--disable-dev-shm-usage","--disable-blink-features=AutomationControlled"],
+        )
+        context = await browser.new_context(
+            user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+            viewport={"width": 1280, "height": 900},
+            locale="id-ID",
+            timezone_id="Asia/Jakarta",
+        )
+        page = await context.new_page()
+        try:
+            # 1) buka profil & isi form
+            await page.goto(PROFILE_URL, wait_until="domcontentloaded")
+            await page.wait_for_timeout(700)
+            await page.mouse.wheel(0, 480)
+
+            await _fill_without_submit(page, amount, message, "gopay")
+
+            # 2) klik "Kirim Dukungan"
+            target = await _click_donate_and_get_checkout_page(page, context)
+
+            # 3) pilih node (page atau frame) untuk dicari QR
+            node = target["frame"] if target["frame"] else (target["page"] or page)
+
+            # 4) cari QR / panel lalu screenshot
+            el = await _find_qr_or_checkout_panel(node)
+            if el:
+                await el.scroll_into_view_if_needed()
+                png = await el.screenshot()
+                print("[scraper] captured CHECKOUT panel PNG:", len(png))
+            else:
+                # fallback screenshot halaman
+                if target["page"]:
+                    png = await target["page"].screenshot(full_page=True)
+                else:
+                    png = await page.screenshot(full_page=True)
+                print("[scraper] WARN: no specific QR element; page screenshot:", len(png))
+
+            await context.close(); await browser.close()
+            return png
+
+        except Exception as e:
+            print("[scraper] error(fetch_gopay_checkout_png):", e)
+            try:
+                snap = await page.screenshot(full_page=True)
+                print("[scraper] debug page screenshot bytes:", len(snap))
+            except:
+                pass
+            await context.close(); await browser.close()
+            return None
 
 # ---------- entrypoints ----------
 async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay") -> bytes | None:
