@@ -1,86 +1,19 @@
 # app/scraper.py
-# Auto-fill Saweria (amount, name, email, message), centang checkbox,
-# pilih GoPay, TIDAK menekan "Kirim Dukungan".
-# Hasil: screenshot panel/halaman sebagai PNG (bytes) untuk ditampilkan di Mini App.
-#
-# ENV yang dibutuhkan:
-#   SAWERIA_USERNAME  -> username saweria (mis. "3ckosystem")
+# Isi form Saweria + pilih GoPay (tanpa submit) lalu screenshot.
+# ENV: SAWERIA_USERNAME  (contoh: "3ckosystem")
 
 import os, re, uuid
 from typing import Optional
 from playwright.async_api import async_playwright, Page, Frame
 
-# helper: set value ke <textarea> / contenteditable via JS
-async def _fill_message_js(page: Page, value: str) -> bool:
-    js = """
-    (val) => {
-      // 1) kandidat spesifik
-      const picks = [
-        'textarea[name="message"]',
-        'textarea[placeholder*="Pesan" i]',
-        'textarea[placeholder*="Selamat pagi" i]',
-        'textarea[required]',
-        'textarea'
-      ];
-      const setTextArea = (el) => {
-        el.focus();
-        el.value = val;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      };
-      for (const sel of picks) {
-        const el = document.querySelector(sel);
-        if (el) return setTextArea(el);
-      }
-
-      // 2) cari lewat label "Pesan"
-      const lbl = Array.from(document.querySelectorAll('label'))
-        .find(l => /pesan/i.test(l.textContent || ''));
-      if (lbl) {
-        // next sibling dulu
-        let el = lbl.nextElementSibling && lbl.nextElementSibling.querySelector
-          ? lbl.nextElementSibling.querySelector('textarea,[contenteditable]')
-          : null;
-        if (!el) {
-          el = lbl.parentElement && lbl.parentElement.querySelector
-            ? lbl.parentElement.querySelector('textarea,[contenteditable]')
-            : null;
-        }
-        if (el && el.tagName === 'TEXTAREA') return setTextArea(el);
-        if (el && el.isContentEditable) {
-          el.focus();
-          el.innerText = val;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }
-      }
-
-      // 3) fallback contenteditable pertama di form
-      const ce = document.querySelector('[contenteditable="true"], [contenteditable]');
-      if (ce) {
-        ce.focus();
-        ce.innerText = val;
-        ce.dispatchEvent(new Event('input', { bubbles: true }));
-        ce.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      }
-      return false;
-    }
-    """
-    try:
-        ok = await page.evaluate(js, value)
-        return bool(ok)
-    except Exception:
-        return False
-
-
 SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "").strip()
 PROFILE_URL = f"https://saweria.co/{SAWERIA_USERNAME}" if SAWERIA_USERNAME else None
 
+# Set True bila validasi form masih tidak kebaca (akan memicu event via JS)
+FORCE_DISPATCH = False
 
-# ---------- util: cari panel besar untuk discreenshot ----------
+
+# ---------- util umum ----------
 async def _find_payment_root(node: Page | Frame):
     candidates = [
         '[data-testid*="donate" i]',
@@ -103,26 +36,33 @@ async def _scan_all_frames_for_visual(page: Page):
     el = await _find_payment_root(page)
     if el:
         return el
-    frames = page.frames
-    print(f"[scraper] frames found: {len(frames)}")
-    for fr in frames:
+    for fr in page.frames:
         try:
             url = (fr.url or "").lower()
         except:
             url = ""
         if any(k in url for k in ["gopay","qris","payment","pay","xendit","midtrans","snap","checkout","iframe"]):
-            print("[scraper] scanning frame:", url[:160])
+            print("[scraper] scanning frame:", url[:140])
         el = await _find_payment_root(fr)
         if el:
             return el
     return None
 
-async def _try_click(page: Page | Frame, selectors, timeout_each=1800) -> bool:
+async def _maybe_dispatch(page: Page, handle):
+    """Opsional: paksa event input/change bila FORCE_DISPATCH=True."""
+    if not FORCE_DISPATCH or handle is None:
+        return
+    try:
+        await page.evaluate("(e)=>{e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));}", handle)
+    except:
+        pass
+
+async def _try_click(page: Page | Frame, selectors, timeout_each=1600, force=False) -> bool:
     for sel in selectors:
         try:
             el = await page.wait_for_selector(sel, timeout=timeout_each)
             await el.scroll_into_view_if_needed()
-            await el.click()
+            await el.click(force=force)
             print("[scraper] clicked via", sel)
             return True
         except:
@@ -130,12 +70,11 @@ async def _try_click(page: Page | Frame, selectors, timeout_each=1800) -> bool:
     return False
 
 
-# ---------- isi form publik TANPA submit ----------
-
-# ganti seluruh isi fungsi _fill_without_submit di app/scraper.py
+# ---------- isi form TANPA submit ----------
 async def _fill_without_submit(page: Page, amount: int, message: str, method: str):
-    # ===== amount (nominal) =====
+    # ===== amount =====
     amount_ok = False
+    amount_handle = None
     for sel in [
         'input[placeholder*="Ketik jumlah" i]',
         'input[aria-label*="Nominal" i]',
@@ -146,12 +85,14 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
             el = await page.wait_for_selector(sel, timeout=2500)
             await el.scroll_into_view_if_needed()
             await el.click()
-            try: await page.keyboard.press("Control+A")
-            except: await page.keyboard.press("Meta+A")
+            try:
+                await page.keyboard.press("Control+A")
+            except:
+                await page.keyboard.press("Meta+A")
             await page.keyboard.press("Backspace")
+            # gunakan type agar event terpicu karakter demi karakter
             await el.type(str(amount))
-            # paksa fire event supaya total ter-update
-            await page.evaluate("(e)=>{e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));}", el)
+            amount_handle = el
             amount_ok = True
             print("[scraper] filled amount via", sel)
             break
@@ -159,8 +100,8 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
             pass
     if not amount_ok:
         print("[scraper] WARN: amount field not found")
-
-    await page.wait_for_timeout(300)
+    await _maybe_dispatch(page, amount_handle)
+    await page.wait_for_timeout(200)
 
     # ===== name (Dari) =====
     name_ok = False
@@ -176,19 +117,21 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
             el = await page.wait_for_selector(sel, timeout=2000)
             await el.scroll_into_view_if_needed()
             await el.click()
-            try: await page.keyboard.press("Control+A")
-            except: await page.keyboard.press("Meta+A")
+            try:
+                await page.keyboard.press("Control+A")
+            except:
+                await page.keyboard.press("Meta+A")
             await page.keyboard.press("Backspace")
             await el.type("Budi")
-            name_ok = True
             print("[scraper] filled name via", sel)
+            await _maybe_dispatch(page, el)
+            name_ok = True
             break
         except:
             pass
     if not name_ok:
         print("[scraper] WARN: name field not found")
-
-    await page.wait_for_timeout(200)
+    await page.wait_for_timeout(150)
 
     # ===== email =====
     email_val = f"donor+{uuid.uuid4().hex[:8]}@example.com"
@@ -197,60 +140,131 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
             el = await page.wait_for_selector(sel, timeout=1800)
             await el.scroll_into_view_if_needed()
             await el.click()
-            try: await page.keyboard.press("Control+A")
-            except: await page.keyboard.press("Meta+A")
+            try:
+                await page.keyboard.press("Control+A")
+            except:
+                await page.keyboard.press("Meta+A")
             await page.keyboard.press("Backspace")
             await el.type(email_val)
             print("[scraper] filled email via", sel)
+            await _maybe_dispatch(page, el)
             break
         except:
             pass
+    await page.wait_for_timeout(150)
 
-    await page.wait_for_timeout(200)
-
-     # ===== message (Pesan) =====
+    # ===== message (Pesan) — INPUT → TEXTAREA → contenteditable =====
     msg_ok = False
-    # coba cara biasa dulu
+    msg_handle = None
+
+    # 1) INPUT (kasus layout kamu)
     for sel in [
-        'textarea[name="message"]',
-        'textarea[placeholder*="Pesan" i]',
-        'textarea[placeholder*="Selamat pagi" i]',
-        'textarea'
+        'input[name="message"]',
+        'input[data-testid="message-input"]',
+        '#message',
+        'input[placeholder*="Selamat pagi" i]',
+        'input[placeholder*="pesan" i]',
     ]:
         try:
-            el = await page.wait_for_selector(sel, timeout=1500)
+            el = await page.wait_for_selector(sel, timeout=1800)
             await el.scroll_into_view_if_needed()
             await el.click()
             try:
-                await el.fill(message)
+                await page.keyboard.press("Control+A")
             except:
-                await page.keyboard.type(message)
+                await page.keyboard.press("Meta+A")
+            await page.keyboard.press("Backspace")
+            await el.type(message)
             msg_ok = True
-            print("[scraper] filled message via", sel)
+            msg_handle = el
+            print("[scraper] filled message via INPUT", sel)
             break
         except:
             pass
 
+    # 2) TEXTAREA
     if not msg_ok:
-        # paksa via JS (label & contenteditable aware)
-        if await _fill_message_js(page, message):
+        for sel in [
+            'textarea[name="message"]',
+            'textarea[placeholder*="Pesan" i]',
+            'textarea[placeholder*="Selamat pagi" i]',
+            'textarea',
+        ]:
+            try:
+                el = await page.wait_for_selector(sel, timeout=1500)
+                await el.scroll_into_view_if_needed()
+                await el.click()
+                await el.fill(message)  # textarea.fill aman
+                msg_ok = True
+                msg_handle = el
+                print("[scraper] filled message via TEXTAREA", sel)
+                break
+            except:
+                pass
+
+    # 3) contenteditable
+    if not msg_ok:
+        try:
+            el = await page.wait_for_selector('[contenteditable="true"], [contenteditable]', timeout=1500)
+            await el.scroll_into_view_if_needed()
+            await el.click()
+            # clear lalu ketik
+            try:
+                await page.keyboard.press("Control+A")
+            except:
+                await page.keyboard.press("Meta+A")
+            await page.keyboard.press("Backspace")
+            await page.keyboard.type(message)
             msg_ok = True
-            print("[scraper] filled message via JS")
-        else:
+            msg_handle = el
+            print("[scraper] filled message via contenteditable")
+        except:
             print("[scraper] WARN: message field not found at all")
 
-    # kecilkan jeda agar UI sempat render
-    await page.wait_for_timeout(250)
+    await _maybe_dispatch(page, msg_handle)
+    await page.wait_for_timeout(200)
+
+    # ===== centang checkbox wajib =====
+    for text in ["17 tahun", "menyetujui", "kebijakan privasi", "ketentuan"]:
+        try:
+            node = page.get_by_text(re.compile(text, re.I))
+            await node.scroll_into_view_if_needed()
+            await node.click()
+            print("[scraper] checked:", text)
+        except:
+            pass
+    await page.wait_for_timeout(150)
+
+    # ===== pilih metode (GoPay) =====
+    method = (method or "gopay").lower()
+    if method == "gopay":
+        # scroll ke area metode
+        try:
+            area = await page.get_by_text(re.compile("Moda pembayaran|Metode pembayaran|GoPay|QRIS", re.I)).element_handle()
+            if area:
+                await area.scroll_into_view_if_needed()
+        except:
+            await page.mouse.wheel(0, 600)
+
+        clicked = await _try_click(page, [
+            'button:has-text("GoPay")',
+            '[role="radio"]:has-text("GoPay")',
+            '[data-testid*="gopay"]',
+            'text=/\\bGoPay\\b/i',
+        ], force=True)
+        if not clicked:
+            print("[scraper] WARN: GoPay not found; continue anyway")
+
+    # selesai; TIDAK submit
+    await page.wait_for_timeout(350)
 
 
-
-
-# ---------- entrypoint yang dipanggil payments.create_invoice ----------
+# ---------- entrypoints ----------
 async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay") -> bytes | None:
     """
-    1) Buka profil,
-    2) Isi form + pilih GoPay + centang checkbox (tanpa submit),
-    3) Screenshot panel pembayaran; fallback ke screenshot halaman.
+    1) Buka profil
+    2) Isi form + pilih GoPay + centang checkbox (tanpa submit)
+    3) Screenshot panel; fallback screenshot halaman
     """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
@@ -277,13 +291,13 @@ async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay
 
         try:
             await page.goto(PROFILE_URL, wait_until="domcontentloaded")
-            await page.wait_for_timeout(800)
-            await page.mouse.wheel(0, 500)
+            await page.wait_for_timeout(700)
+            await page.mouse.wheel(0, 480)
 
             await _fill_without_submit(page, amount, message, method or "gopay")
-            await page.wait_for_timeout(800)  # beri waktu UI re-render
+            await page.wait_for_timeout(700)
 
-            target = page   # tidak ada popup/modal karena kita tidak submit
+            target = page
             el = await _scan_all_frames_for_visual(target)
             if el:
                 try:
@@ -311,7 +325,7 @@ async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay
             return None
 
 
-# ---------- debug snapshot full page (tanpa isi form) ----------
+# ---------- debug helpers ----------
 async def debug_snapshot() -> bytes | None:
     if not PROFILE_URL:
         print("[debug_snapshot] ERROR: SAWERIA_USERNAME belum di-set")
@@ -329,24 +343,22 @@ async def debug_snapshot() -> bytes | None:
         )
         page = await context.new_page()
         await page.goto(PROFILE_URL, wait_until="domcontentloaded")
-        await page.wait_for_timeout(1200)
+        await page.wait_for_timeout(1000)
         await page.mouse.wheel(0, 600)
         png = await page.screenshot(full_page=True)
         await context.close(); await browser.close()
         return png
 
 
-# ---------- debug: isi form (tanpa submit) lalu screenshot full page ----------
 async def debug_fill_snapshot(amount: int, message: str, method: str = "gopay") -> bytes | None:
     if not PROFILE_URL:
         print("[debug_fill_snapshot] ERROR: SAWERIA_USERNAME belum di-set")
         return None
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
             args=[
-                "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+                "--no-sandbox","--disable-gpu","--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
             ],
         )
@@ -360,11 +372,11 @@ async def debug_fill_snapshot(amount: int, message: str, method: str = "gopay") 
         page = await context.new_page()
         try:
             await page.goto(PROFILE_URL, wait_until="domcontentloaded")
-            await page.wait_for_timeout(800)
-            await page.mouse.wheel(0, 500)
+            await page.wait_for_timeout(700)
+            await page.mouse.wheel(0, 480)
 
             await _fill_without_submit(page, amount, message, method or "gopay")
-            await page.wait_for_timeout(800)
+            await page.wait_for_timeout(700)
 
             png = await page.screenshot(full_page=True)
             print(f"[debug_fill_snapshot] bytes={len(png)}")
