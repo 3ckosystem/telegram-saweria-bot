@@ -65,6 +65,7 @@ async def _try_click(page: Page | Frame, selectors, timeout_each=1800) -> bool:
 
 
 # ---------- isi form publik TANPA submit ----------
+
 # ganti seluruh isi fungsi _fill_without_submit di app/scraper.py
 async def _fill_without_submit(page: Page, amount: int, message: str, method: str):
     # ===== amount (nominal) =====
@@ -224,7 +225,6 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
             print("[scraper] WARN: GoPay not found; continue anyway")
 
     await page.wait_for_timeout(400)
-
 
 
 
