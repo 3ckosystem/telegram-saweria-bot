@@ -414,95 +414,139 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
             await context.close(); await browser.close()
             return None
 
+# app/scraper.py — REPLACE fungsi ini
+
 async def fetch_gopay_qr_only_png(amount: int, message: str) -> bytes | None:
     """
-    Flow: isi form -> klik 'Kirim Dukungan' -> tunggu checkout GoPay
-          -> ambil HANYA gambar QR (high-res).
+    Isi form -> klik 'Kirim Dukungan' -> tunggu checkout GoPay
+    -> ambil HANYA QR matrix (high-res). Prefer crop via DOM (canvas/img persegi),
+       fallback: potong dari poster jadi kotak di tengah dengan PIL.
     """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
         return None
 
+    from io import BytesIO
+    from PIL import Image
     from playwright.async_api import Error as PWError
+
+    # --- util: pilih kandidat elemen yang paling 'persegi' & besar ---
+    async def pick_square_qr_candidate(node: Page | Frame):
+        # kumpulkan semua canvas & img yg berpotensi QR
+        handles = []
+        for q in [
+            "canvas",
+            'img[src^="data:image"]',
+            'img[alt*=\"QR\" i]',
+            '[data-testid=\"qrcode\"] img',
+            '[class*=\"qrcode\" i] img',
+            'img[alt*=\"QRIS\" i]',
+        ]:
+            try:
+                hs = await node.query_selector_all(q)
+                handles.extend(hs)
+            except:
+                pass
+        if not handles:
+            return None
+
+        best = None
+        best_score = -1.0
+        for h in handles:
+            try:
+                box = await h.evaluate("""el => {
+                  const r = el.getBoundingClientRect();
+                  return {w: r.width, h: r.height};
+                }""")
+                w = float(box["w"]); h = float(box["h"])
+                if w < 80 or h < 80:  # terlalu kecil, skip
+                    continue
+                ratio = min(w, h) / max(w, h)          # makin dekat 1 makin kotak
+                area  = w * h
+                score = ratio * (area ** 0.5)          # bobot ukuran + kepersegi-an
+                if score > best_score:
+                    best_score = score
+                    best = h
+            except:
+                pass
+        return best
+
+    # --- util: crop kotak tengah dari poster (fallback) ---
+    def center_square_crop(png_bytes: bytes) -> bytes:
+        im = Image.open(BytesIO(png_bytes)).convert("RGB")
+        W, H = im.size
+        # buang margin putih besar dulu (trim kasar)
+        bg = Image.new("RGB", im.size, (255, 255, 255))
+        diff = Image.eval(ImageChops.difference(im, bg), lambda p: p > 10 and 255)
+        bbox = diff.getbbox()
+        if bbox:
+            im = im.crop(bbox)
+            W, H = im.size
+        # ambil persegi terbesar di tengah
+        side = min(W, H)
+        left = (W - side) // 2
+        top  = (H - side) // 2
+        im = im.crop((left, top, left + side, top + side))
+
+        out = BytesIO(); im.save(out, format="PNG")
+        return out.getvalue()
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox","--disable-gpu","--disable-dev-shm-usage","--disable-blink-features=AutomationControlled"],
+            args=[
+                "--no-sandbox","--disable-gpu","--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ],
         )
-        # scale 2x untuk hasil tajam
         context = await browser.new_context(
             user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
-            viewport={"width": 1280, "height": 900},
-            device_scale_factor=2,
+            viewport={"width": 1366, "height": 960},
+            device_scale_factor=3,       # bikin tajam
             locale="id-ID",
             timezone_id="Asia/Jakarta",
         )
         page = await context.new_page()
         try:
-            # 1) ke profil & isi form (tanpa submit)
+            # 1) profil + isi form
             await page.goto(PROFILE_URL, wait_until="domcontentloaded")
             await page.wait_for_timeout(600)
-            await page.mouse.wheel(0, 480)
+            await page.mouse.wheel(0, 500)
             await _fill_without_submit(page, amount, message, "gopay")
 
-            # 2) submit → dapatkan checkout target (tab/iframe/same page)
+            # 2) submit → checkout
             target = await _click_donate_and_get_checkout_page(page, context)
             node = target["frame"] if target["frame"] else (target["page"] or page)
 
-            # 3) cari elemen QR — prioritas: canvas -> img dataURL -> img biasa
-            qr_selectors = [
-                "canvas",                                 # banyak penyedia render QR di canvas
-                'img[src^="data:image"]',                 # data URL
-                'img[alt*="QR"]',                         # fallback img
-                '[data-testid="qrcode"] img',             # testid umum
-                '[class*="qrcode"] img',                  # kelas umum
-            ]
+            # 3) coba cari elemen QR yang benar-benar persegi di node utama
+            qr_el = await pick_square_qr_candidate(node)
 
-            qr_el = None
-            for sel in qr_selectors:
-                try:
-                    qr_el = await node.wait_for_selector(sel, timeout=8000)
-                    if qr_el:
-                        print("[scraper] QR element via", sel)
-                        break
-                except PWError:
-                    pass
-
+            # 4) kalau belum ketemu, scan semua frame checkout
             if not qr_el:
-                # fallback: screenshot panel checkout (lebih luas)
-                el = await _find_qr_or_checkout_panel(node) or node
-                png = await (el.screenshot() if hasattr(el, "screenshot") else node.screenshot(full_page=True))
-                print("[scraper] WARN: QR not found; fallback panel/page:", len(png))
+                frames = node.page.frames if hasattr(node, "page") else page.frames
+                for fr in frames:
+                    url = (fr.url or "").lower()
+                    if any(k in url for k in ["gopay","qris","xendit","midtrans","snap","checkout","pay"]):
+                        qr_el = await pick_square_qr_candidate(fr)
+                        if qr_el:
+                            print("[scraper] square QR found in frame:", url[:100])
+                            break
+
+            if qr_el:
+                await qr_el.scroll_into_view_if_needed()
+                png = await qr_el.screenshot()
+                print("[scraper] captured square QR element:", len(png))
                 await context.close(); await browser.close()
                 return png
 
-            # 4) kalau <canvas>, coba ambil dataURL → decode
-            try:
-                tag = await qr_el.evaluate("e => e.tagName.toLowerCase()")
-            except:
-                tag = "img"
-
-            if tag == "canvas":
-                try:
-                    data_url = await qr_el.evaluate("c => c.toDataURL('image/png')")
-                    import base64, re as _re
-                    b64 = _re.sub(r'^data:image/\\w+;base64,', '', data_url)
-                    png = base64.b64decode(b64)
-                    print("[scraper] got QR from canvas toDataURL:", len(png))
-                except Exception as e:
-                    print("[scraper] WARN: toDataURL failed, screenshot element. err:", e)
-                    await qr_el.scroll_into_view_if_needed()
-                    png = await qr_el.screenshot()
-            else:
-                # img: langsung screenshot elemen agar crop pas pinggir QR
-                await qr_el.scroll_into_view_if_needed()
-                png = await qr_el.screenshot()
-                print("[scraper] captured QR IMG:", len(png))
-
+            # 5) fallback: screenshot poster → crop kotak tengah
+            panel = await _find_qr_or_checkout_panel(node) or node
+            poster = await (panel.screenshot() if hasattr(panel, "screenshot") else node.screenshot(full_page=True))
+            cropped = center_square_crop(poster)
+            print("[scraper] fallback poster->center-square:", len(cropped))
             await context.close(); await browser.close()
-            return png
+            return cropped
 
         except Exception as e:
             print("[scraper] error(fetch_gopay_qr_only_png):", e)
@@ -513,6 +557,8 @@ async def fetch_gopay_qr_only_png(amount: int, message: str) -> bytes | None:
                 pass
             await context.close(); await browser.close()
             return None
+
+
 
 # ---------- entrypoints ----------
 async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay") -> bytes | None:
