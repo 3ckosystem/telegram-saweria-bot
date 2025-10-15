@@ -210,6 +210,13 @@ async def debug_saweria_qr(amount: int = 25000, msg: str = "INV:qr-only"):
         raise HTTPException(500, "Gagal ambil QR")
     return Response(content=png, media_type="image/png")
 
+@app.get("/debug/saweria-qr-masked")
+async def debug_saweria_qr_masked(amount: int = 25000, msg: str = "INV:mask"):
+    from .scraper import fetch_gopay_checkout_png
+    png = await fetch_gopay_checkout_png(amount, msg)
+    if not png:
+        raise HTTPException(500, "Gagal capture checkout")
+    return Response(content=png, media_type="image/png")
 
 # ------------- STARTUP / SHUTDOWN -------------
 @app.on_event("startup")

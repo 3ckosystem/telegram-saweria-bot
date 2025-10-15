@@ -6,6 +6,39 @@ import os, re, uuid
 from typing import Optional
 from playwright.async_api import async_playwright, Page, Frame
 
+# --- masker: tutup tulisan di poster GoPay ---
+from io import BytesIO
+from PIL import Image, ImageDraw
+
+def mask_poster_text(png_bytes: bytes,
+                     top_band=(0.22, 0.32),      # area “saweria.co”
+                     bottom_band=(0.79, 0.87),   # area “Dicetak oleh: GoPay”
+                     margin_x=0.08               # sisakan 8% di kiri/kanan
+                     ) -> bytes:
+    """
+    Timpa dua pita horizontal dengan putih.
+    Nilai band pakai rasio tinggi poster agar fleksibel.
+    """
+    im = Image.open(BytesIO(png_bytes)).convert("RGB")
+    W, H = im.size
+    draw = ImageDraw.Draw(im)
+
+    # pita atas
+    x1 = int(W * margin_x)
+    x2 = int(W * (1 - margin_x))
+    y1 = int(H * top_band[0])
+    y2 = int(H * top_band[1])
+    draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255))
+
+    # pita bawah
+    y3 = int(H * bottom_band[0])
+    y4 = int(H * bottom_band[1])
+    draw.rectangle([x1, y3, x2, y4], fill=(255, 255, 255))
+
+    out = BytesIO()
+    im.save(out, format="PNG")
+    return out.getvalue()
+
 SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "").strip()
 PROFILE_URL = f"https://saweria.co/{SAWERIA_USERNAME}" if SAWERIA_USERNAME else None
 
@@ -356,6 +389,18 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
     Alur: buka profil -> isi form -> pilih GoPay -> klik 'Kirim Dukungan'
           -> tunggu halaman/iframe pembayaran -> screenshot QR / panel.
     """
+
+    el = await _find_qr_or_checkout_panel(node)
+    if el:
+        await el.scroll_into_view_if_needed()
+        png = await el.screenshot()          # poster penuh
+    else:
+        # fallback: screenshot halaman
+        if target["page"]:
+            png = await target["page"].screenshot(full_page=True)
+        else:
+            png = await page.screenshot(full_page=True)
+
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
         return None
@@ -392,6 +437,8 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
             if el:
                 await el.scroll_into_view_if_needed()
                 png = await el.screenshot()
+                png = mask_poster_text(png)      # timpa tulisan dengan putih
+                return png
                 print("[scraper] captured CHECKOUT panel PNG:", len(png))
             else:
                 # fallback screenshot halaman
@@ -402,6 +449,7 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
                 print("[scraper] WARN: no specific QR element; page screenshot:", len(png))
 
             await context.close(); await browser.close()
+            png = mask_poster_text(png)
             return png
 
         except Exception as e:
