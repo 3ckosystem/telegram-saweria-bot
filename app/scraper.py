@@ -10,6 +10,72 @@ import os, re, uuid
 from typing import Optional
 from playwright.async_api import async_playwright, Page, Frame
 
+# helper: set value ke <textarea> / contenteditable via JS
+async def _fill_message_js(page: Page, value: str) -> bool:
+    js = """
+    (val) => {
+      // 1) kandidat spesifik
+      const picks = [
+        'textarea[name="message"]',
+        'textarea[placeholder*="Pesan" i]',
+        'textarea[placeholder*="Selamat pagi" i]',
+        'textarea[required]',
+        'textarea'
+      ];
+      const setTextArea = (el) => {
+        el.focus();
+        el.value = val;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      };
+      for (const sel of picks) {
+        const el = document.querySelector(sel);
+        if (el) return setTextArea(el);
+      }
+
+      // 2) cari lewat label "Pesan"
+      const lbl = Array.from(document.querySelectorAll('label'))
+        .find(l => /pesan/i.test(l.textContent || ''));
+      if (lbl) {
+        // next sibling dulu
+        let el = lbl.nextElementSibling && lbl.nextElementSibling.querySelector
+          ? lbl.nextElementSibling.querySelector('textarea,[contenteditable]')
+          : null;
+        if (!el) {
+          el = lbl.parentElement && lbl.parentElement.querySelector
+            ? lbl.parentElement.querySelector('textarea,[contenteditable]')
+            : null;
+        }
+        if (el && el.tagName === 'TEXTAREA') return setTextArea(el);
+        if (el && el.isContentEditable) {
+          el.focus();
+          el.innerText = val;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+      }
+
+      // 3) fallback contenteditable pertama di form
+      const ce = document.querySelector('[contenteditable="true"], [contenteditable]');
+      if (ce) {
+        ce.focus();
+        ce.innerText = val;
+        ce.dispatchEvent(new Event('input', { bubbles: true }));
+        ce.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+      return false;
+    }
+    """
+    try:
+        ok = await page.evaluate(js, value)
+        return bool(ok)
+    except Exception:
+        return False
+
+
 SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "").strip()
 PROFILE_URL = f"https://saweria.co/{SAWERIA_USERNAME}" if SAWERIA_USERNAME else None
 
@@ -142,16 +208,17 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
 
     await page.wait_for_timeout(200)
 
-    # ===== message (Pesan) =====
+     # ===== message (Pesan) =====
     msg_ok = False
+    # coba cara biasa dulu
     for sel in [
         'textarea[name="message"]',
         'textarea[placeholder*="Pesan" i]',
         'textarea[placeholder*="Selamat pagi" i]',
-        'textarea',
+        'textarea'
     ]:
         try:
-            el = await page.wait_for_selector(sel, timeout=2000)
+            el = await page.wait_for_selector(sel, timeout=1500)
             await el.scroll_into_view_if_needed()
             await el.click()
             try:
@@ -165,66 +232,16 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
             pass
 
     if not msg_ok:
-        # fallback ke contenteditable (beberapa tema pakai div)
-        try:
-            el = await page.wait_for_selector('[contenteditable="true"], [contenteditable]', timeout=2000)
-            await el.scroll_into_view_if_needed()
-            await el.click()
-            # clear konten lama, lalu ketik
-            await page.keyboard.down("Meta"); await page.keyboard.press("KeyA"); await page.keyboard.up("Meta")
-            await page.keyboard.press("Backspace")
-            await page.keyboard.type(message)
-            # paksa event
-            await page.evaluate("(e)=>{e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));}", el)
+        # paksa via JS (label & contenteditable aware)
+        if await _fill_message_js(page, message):
             msg_ok = True
-            print("[scraper] filled message via contenteditable")
-        except:
+            print("[scraper] filled message via JS")
+        else:
             print("[scraper] WARN: message field not found at all")
 
-    # ===== centang checkbox wajib =====
-    for text in ["17 tahun", "menyetujui", "kebijakan privasi", "ketentuan"]:
-        try:
-            node = page.get_by_text(re.compile(text, re.I))
-            await node.scroll_into_view_if_needed()
-            await node.click()
-            print("[scraper] checked:", text)
-        except:
-            pass
+    # kecilkan jeda agar UI sempat render
+    await page.wait_for_timeout(250)
 
-    await page.wait_for_timeout(200)
-
-    # ===== pilih metode (GoPay) =====
-    method = (method or "gopay").lower()
-    if method == "gopay":
-        # scroll ke area metode pembayaran dulu
-        try:
-            area = await page.get_by_text(re.compile("Moda pembayaran|Metode pembayaran|GoPay|QRIS", re.I)).element_handle()
-            if area:
-                await area.scroll_into_view_if_needed()
-        except:
-            await page.mouse.wheel(0, 600)
-
-        # klik GoPay pakai beberapa cara, dengan force
-        clicked = False
-        for sel in [
-            'button:has-text("GoPay")',
-            '[role="radio"]:has-text("GoPay")',
-            '[data-testid*="gopay"]',
-            'text=/\\bGoPay\\b/i',
-        ]:
-            try:
-                el = await page.wait_for_selector(sel, timeout=1500)
-                await el.scroll_into_view_if_needed()
-                await el.click(force=True)
-                clicked = True
-                print("[scraper] selected GoPay via", sel)
-                break
-            except:
-                pass
-        if not clicked:
-            print("[scraper] WARN: GoPay not found; continue anyway")
-
-    await page.wait_for_timeout(400)
 
 
 
