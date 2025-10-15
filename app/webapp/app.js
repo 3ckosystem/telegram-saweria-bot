@@ -1,13 +1,12 @@
 // app/webapp/app.js
-// Telegram Mini App client for Saweria flow (with scraper QR + status polling)
+// Telegram Mini App client for Saweria flow (GoPay scraper only-show-if-ready)
 
 const tg = window.Telegram?.WebApp;
 tg?.expand();
 
-// GANTI dengan username Saweria kamu (untuk link bantu di UI)
+// (opsional) link bantu
 const yourSaweriaUrl = "https://saweria.co/3ckosystem";
 
-// ---------- helpers ----------
 function getUserId() {
   const fromInit = tg?.initDataUnsafe?.user?.id;
   if (fromInit) return fromInit;
@@ -21,7 +20,6 @@ function htmlEscape(s) {
   }[c]));
 }
 
-// ---------- render groups (sinkronkan dengan GROUP_IDS_JSON server) ----------
 async function renderGroups() {
   const groups = (window.injectedGroups || [
     { id: "-1002593237267", label: "Group M" },
@@ -40,20 +38,12 @@ async function renderGroups() {
 }
 renderGroups();
 
-// ---------- main click handler ----------
 document.getElementById("pay")?.addEventListener("click", async () => {
   const selected = [...document.querySelectorAll("#groups input:checked")].map(i => i.value);
   const amount = parseInt(document.getElementById("amount")?.value || "0", 10);
 
-  // Validasi sederhana
-  if (!selected.length) {
-    alert("Pilih minimal 1 grup");
-    return;
-  }
-  if (!Number.isFinite(amount) || amount <= 0) {
-    alert("Masukkan nominal pembayaran yang valid (> 0)");
-    return;
-  }
+  if (!selected.length) return alert("Pilih minimal 1 grup");
+  if (!Number.isFinite(amount) || amount <= 0) return alert("Masukkan nominal pembayaran yang valid (> 0)");
 
   const userId = getUserId();
   if (!userId) {
@@ -62,7 +52,7 @@ document.getElementById("pay")?.addEventListener("click", async () => {
     return;
   }
 
-  // Create invoice
+  // Buat invoice
   let inv;
   try {
     const res = await fetch(`${window.location.origin}/api/invoice`, {
@@ -70,93 +60,98 @@ document.getElementById("pay")?.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: userId, groups: selected, amount }),
     });
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(`Create invoice gagal: ${txt}`);
-    }
+    if (!res.ok) throw new Error(await res.text());
     inv = await res.json();
   } catch (e) {
     document.getElementById("qr").innerHTML =
-      `<div style="color:#c00">${htmlEscape(e.message)}</div>`;
+      `<div style="color:#c00">Create invoice gagal: ${htmlEscape(e.message || String(e))}</div>`;
     return;
   }
 
-  // Ref code (untuk ditempel user di kolom pesan jika perlu)
   const ref = `INV:${inv.invoice_id}`;
-
-  // URL QR di backend (akan menampilkan PNG dari qris_payload atau fallback)
-  const qrUrl = `${window.location.origin}/api/qr/${inv.invoice_id}`;
-
-  // Render UI pembayaran
-  document.getElementById('qr').innerHTML = `
-    <div><b>Scan QR (akan diperbarui otomatis):</b></div>
-    <img id="qrimg" alt="QRIS" style="max-width:240px;border:1px solid #eee;padding:6px;border-radius:8px"
-         src="${qrUrl}" />
-    <div style="margin-top:12px"><b>Kode pembayaran:</b> <code id="invcode">${htmlEscape(ref)}</code>
+  const qrContainer = document.getElementById('qr');
+  qrContainer.innerHTML = `
+    <div><b>Pembayaran GoPay</b></div>
+    <div id="qruistate" style="margin:8px 0 12px 0; opacity:.85">Menyiapkan QRIS GoPay…</div>
+    <!-- QR akan disisipkan DI SINI hanya jika siap -->
+    <div style="margin-top:8px"><b>Kode pembayaran:</b> <code id="invcode">${htmlEscape(ref)}</code>
       <button id="copyinv" style="margin-left:6px">Copy</button>
     </div>
     <ol style="margin-top:8px;padding-left:18px">
-      <li>Buka halaman Saweria (opsional jika tidak scan): <a href="${yourSaweriaUrl}" target="_blank" rel="noopener">${yourSaweriaUrl}</a></li>
-      <li>Jika diperlukan, tempel kode <b>${htmlEscape(ref)}</b> di kolom <i>pesan</i> sebelum bayar.</li>
-      <li>Setelah bayar, Mini App akan menutup otomatis dan bot mengirim link undangan.</li>
+      <li>Jika perlu, buka: <a href="${yourSaweriaUrl}" target="_blank" rel="noopener">${yourSaweriaUrl}</a></li>
+      <li>Tempel kode <b>${htmlEscape(ref)}</b> di kolom <i>pesan</i> sebelum bayar (opsional bila scan QR).</li>
+      <li>Setelah bayar, Mini App menutup otomatis dan bot mengirim link undangan.</li>
     </ol>
     <div id="wait" style="margin-top:12px">
-      <b>Menunggu pembayaran...</b>
+      <b>Menunggu pembayaran…</b>
       <div id="spinner" style="opacity:.75">Bot akan kirim undangan otomatis setelah pembayaran diterima.</div>
       <button id="btn-done" style="margin-top:8px">Saya sudah bayar</button>
     </div>
   `;
 
-  // Tombol copy + error handler untuk QR image
-  setTimeout(() => {
+  // tombol copy
+  document.getElementById('copyinv')?.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(ref);
     const btn = document.getElementById('copyinv');
-    if (btn) btn.onclick = async () => {
-      await navigator.clipboard.writeText(ref);
-      btn.textContent = "Copied!";
-      setTimeout(() => btn.textContent = "Copy", 1500);
-    };
-    const img = document.getElementById('qrimg');
-    if (img) img.onerror = () => {
-      document.getElementById('qr').insertAdjacentHTML(
-        'beforeend',
-        `<div style="color:#c00;margin-top:6px">QR gagal dimuat. Coba buka langsung: <a href="${qrUrl}" target="_blank" rel="noopener">${qrUrl}</a></div>`
-      );
-    };
-  }, 0);
+    btn.textContent = "Copied!";
+    setTimeout(() => (btn.textContent = "Copy"), 1500);
+  });
 
-  // === AUTO-RELOAD QR hasil scraper (max 10x @1.5s) ===
-  (function autoReloadQR() {
-    let tries = 0;
-    const img = document.getElementById('qrimg');
-    if (!img) return;
-    const reload = () => {
-      tries++;
-      img.src = `${qrUrl}?t=${Date.now()}`; // cache buster
-      if (tries < 10) setTimeout(reload, 1500);
-    };
-    setTimeout(reload, 1200);
-  })();
+  // === POLLING: cek QR dari scraper (GoPay) ===
+  const statusUrl = `${window.location.origin}/api/invoice/${inv.invoice_id}/status`;
+  const qrUrl = `${window.location.origin}/api/qr/${inv.invoice_id}`;
+  const stateEl = document.getElementById('qruistate');
 
-  // === POLLING STATUS (tutup otomatis saat PAID) ===
-  let pollTimer = setInterval(() => checkPaid(inv.invoice_id, false), 2000);
-  document.getElementById('btn-done')?.addEventListener("click", () => checkPaid(inv.invoice_id, true));
-
-  async function checkPaid(id, manual) {
+  let triesQR = 0;
+  let qrShown = false;
+  const pollQR = async () => {
+    triesQR++;
     try {
-      const r = await fetch(`${window.location.origin}/api/invoice/${id}/status`);
+      const r = await fetch(statusUrl);
+      if (r.ok) {
+        const s = await r.json();
+        if (s.has_qr) {
+          // render IMG hanya jika QR siap
+          if (!qrShown) {
+            const img = document.createElement('img');
+            img.id = 'qrimg';
+            img.alt = 'GoPay QR';
+            img.style = 'max-width:240px;border:1px solid #eee;padding:6px;border-radius:8px';
+            img.src = `${qrUrl}?t=${Date.now()}`; // cache buster
+            qrContainer.insertBefore(img, document.getElementById('invcode').parentElement);
+            qrShown = true;
+            if (stateEl) stateEl.textContent = "QRIS GoPay siap. Silakan scan dengan GoPay.";
+          }
+          return; // berhenti polling QR
+        }
+      }
+    } catch (_) {}
+    if (triesQR < 10) {
+      setTimeout(pollQR, 1500);
+    } else {
+      if (!qrShown && stateEl) stateEl.innerHTML = `<span style="color:#c00">QRIS gagal dimuat.</span>`;
+    }
+  };
+  setTimeout(pollQR, 800);
+
+  // === POLLING: status pembayaran (auto-close saat PAID) ===
+  let pollPaidTimer = setInterval(checkPaid, 2000);
+  document.getElementById('btn-done')?.addEventListener("click", () => checkPaid(true));
+
+  async function checkPaid(manual = false) {
+    try {
+      const r = await fetch(statusUrl);
       if (!r.ok) return;
       const s = await r.json();
       if (s.status === "PAID") {
-        clearInterval(pollTimer);
+        clearInterval(pollPaidTimer);
         const wait = document.getElementById('wait');
-        if (wait) {
-          wait.innerHTML = `<div style="color:green"><b>Pembayaran diterima.</b> Undangan dikirim via DM bot.</div>`;
-        }
+        if (wait) wait.innerHTML = `<div style="color:green"><b>Pembayaran diterima.</b> Undangan dikirim via DM bot.</div>`;
         setTimeout(() => tg?.close?.(), 2000);
       } else if (manual) {
         const sp = document.getElementById('spinner');
         if (sp) sp.textContent = "Belum terdeteksi. Jika sudah bayar, tunggu beberapa detik…";
       }
-    } catch (_) { /* abaikan error jaringan ringan */ }
+    } catch (_) {}
   }
 });
