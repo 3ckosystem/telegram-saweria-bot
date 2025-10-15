@@ -1,9 +1,3 @@
-tidak berubah, ini isi file scrapper saya. coba cek apakah ada yang salah
-
-# app/scraper.py
-# Isi form Saweria + pilih GoPay (tanpa submit) lalu screenshot.
-# ENV: SAWERIA_USERNAME  (contoh: "3ckosystem")
-
 import os, re, uuid
 from typing import Optional
 from playwright.async_api import async_playwright, Page, Frame
