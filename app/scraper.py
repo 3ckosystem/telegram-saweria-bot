@@ -2,9 +2,10 @@
 # Isi form Saweria + pilih GoPay (tanpa submit) lalu screenshot.
 # ENV: SAWERIA_USERNAME  (contoh: "3ckosystem")
 
-import os, re, uuid
+import os, re, uuid, BytesIO
 from typing import Optional
 from playwright.async_api import async_playwright, Page, Frame
+from PIL import Image, ImageChops   
 
 SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "").strip()
 PROFILE_URL = f"https://saweria.co/{SAWERIA_USERNAME}" if SAWERIA_USERNAME else None
