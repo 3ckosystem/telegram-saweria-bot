@@ -108,4 +108,60 @@ async def fetch_qr_png(amount: int, message: str, method: str | None = None) -> 
             await context.close(); await browser.close()
             return None
         
-        
+
+
+# --- DEBUG: snapshot full page tanpa isi form ---
+async def debug_snapshot() -> bytes | None:
+    """
+    Buka https://saweria.co/<SAWERIA_USERNAME> dan kirim balik screenshot PNG full page.
+    Murni untuk uji konektivitas & kompatibilitas Chromium di Railway.
+    """
+    import os
+    from playwright.async_api import async_playwright
+
+    SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "").strip()
+    if not SAWERIA_USERNAME:
+        print("[debug_snapshot] ERROR: SAWERIA_USERNAME kosong")
+        return None
+    url = f"https://saweria.co/{SAWERIA_USERNAME}"
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        )
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 900},
+            locale="id-ID",
+        )
+        page = await context.new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded")
+            await page.wait_for_timeout(1500)
+            # pancing lazy-load
+            await page.mouse.wheel(0, 600)
+            await page.wait_for_timeout(500)
+
+            png = await page.screenshot(full_page=True)
+            print(f"[debug_snapshot] captured {len(png)} bytes from {url}")
+            await context.close(); await browser.close()
+            return png
+        except Exception as e:
+            print("[debug_snapshot] error:", e)
+            try:
+                snap = await page.screenshot(full_page=True)
+                print("[debug_snapshot] fallback bytes:", len(snap))
+                await context.close(); await browser.close()
+                return snap
+            except:
+                await context.close(); await browser.close()
+                return None

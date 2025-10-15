@@ -1,5 +1,5 @@
 # app/main.py
-import os, json, re, base64, hmac, hashlib, io
+import os, json, re, base64, hmac, hashlib, io, httpx
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException
@@ -12,6 +12,9 @@ from telegram.ext import Application
 
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
+
+from .scraper import debug_snapshot
+
 
 # ------------- ENV -------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -155,6 +158,34 @@ if ENV != "prod":
     @app.get("/debug/invite-logs/{invoice_id}")
     def debug_invite_logs(invoice_id: str):
         return {"invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
+
+# ---- DEBUG: tes HTTP fetch langsung (tanpa Chromium) ----
+@app.get("/debug/fetch-saweria")
+async def debug_fetch_saweria():
+    username = os.getenv("SAWERIA_USERNAME", "").strip()
+    if not username:
+        raise HTTPException(400, "SAWERIA_USERNAME belum di-set")
+    url = f"https://saweria.co/{username}"
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(url, headers={
+            "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+        })
+    return {
+        "url": url,
+        "status": r.status_code,
+        "len": len(r.text),
+        "snippet": r.text[:300]
+    }
+
+# ---- DEBUG: ambil PNG dari Chromium (Playwright) ----
+@app.get("/debug/saweria-snap")
+async def debug_saweria_snap():
+    png = await debug_snapshot()
+    if not png:
+        raise HTTPException(500, "Gagal snapshot (lihat logs)")
+    return Response(content=png, media_type="image/png")
+
 
 # ------------- STARTUP / SHUTDOWN -------------
 @app.on_event("startup")
