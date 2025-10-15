@@ -14,6 +14,7 @@ from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
 
 from .scraper import debug_snapshot
+from .scraper import debug_fill_snapshot
 
 
 # ------------- ENV -------------
@@ -184,6 +185,13 @@ async def debug_saweria_snap():
     png = await debug_snapshot()
     if not png:
         raise HTTPException(500, "Gagal snapshot (lihat logs)")
+    return Response(content=png, media_type="image/png")
+
+@app.get("/debug/saweria-fill")
+async def debug_saweria_fill(amount: int = 25000, msg: str = "INV:debug", method: str = "gopay"):
+    png = await debug_fill_snapshot(amount, msg, method)
+    if not png:
+        raise HTTPException(500, "Gagal snapshot setelah pengisian form (lihat logs)")
     return Response(content=png, media_type="image/png")
 
 

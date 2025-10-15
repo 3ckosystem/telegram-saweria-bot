@@ -1,6 +1,10 @@
 # app/scraper.py
-# Auto-fill Saweria (amount, name, email, message), pilih GoPay, centang checkbox,
-# TIDAK menekan "Kirim Dukungan". Lalu screenshot panel pembayaran untuk ditampilkan di Mini App.
+# Auto-fill Saweria (amount, name, email, message), centang checkbox,
+# pilih GoPay, TIDAK menekan "Kirim Dukungan".
+# Hasil: screenshot panel/halaman sebagai PNG (bytes) untuk ditampilkan di Mini App.
+#
+# ENV yang dibutuhkan:
+#   SAWERIA_USERNAME  -> username saweria (mis. "3ckosystem")
 
 import os, re, uuid
 from typing import Optional
@@ -89,7 +93,12 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
         except: pass
 
     # message
-    for sel in ['textarea[name="message"]','textarea[placeholder*="pesan" i]','textarea','[contenteditable="true"], [contenteditable]']:
+    for sel in [
+        'textarea[name="message"]',
+        'textarea[placeholder*="pesan" i]',
+        'textarea',
+        '[contenteditable="true"], [contenteditable]'
+    ]:
         try:
             el = await page.wait_for_selector(sel, timeout=1800)
             await el.scroll_into_view_if_needed()
@@ -130,10 +139,9 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
 # ---------- entrypoint yang dipanggil payments.create_invoice ----------
 async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay") -> bytes | None:
     """
-    1) Buka profil
-    2) Isi form + pilih GoPay + centang checkbox
-    3) Screenshot panel pembayaran (tanpa submit)
-    4) Fallback: screenshot halaman jika panel tak ketemu
+    1) Buka profil,
+    2) Isi form + pilih GoPay + centang checkbox (tanpa submit),
+    3) Screenshot panel pembayaran; fallback ke screenshot halaman.
     """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
@@ -194,7 +202,7 @@ async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay
             return None
 
 
-# ---------- debug snapshot full page (opsional) ----------
+# ---------- debug snapshot full page (tanpa isi form) ----------
 async def debug_snapshot() -> bytes | None:
     if not PROFILE_URL:
         print("[debug_snapshot] ERROR: SAWERIA_USERNAME belum di-set")
@@ -217,3 +225,48 @@ async def debug_snapshot() -> bytes | None:
         png = await page.screenshot(full_page=True)
         await context.close(); await browser.close()
         return png
+
+
+# ---------- debug: isi form (tanpa submit) lalu screenshot full page ----------
+async def debug_fill_snapshot(amount: int, message: str, method: str = "gopay") -> bytes | None:
+    if not PROFILE_URL:
+        print("[debug_fill_snapshot] ERROR: SAWERIA_USERNAME belum di-set")
+        return None
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        )
+        context = await browser.new_context(
+            user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+            viewport={"width": 1280, "height": 900},
+            locale="id-ID",
+            timezone_id="Asia/Jakarta",
+        )
+        page = await context.new_page()
+        try:
+            await page.goto(PROFILE_URL, wait_until="domcontentloaded")
+            await page.wait_for_timeout(800)
+            await page.mouse.wheel(0, 500)
+
+            await _fill_without_submit(page, amount, message, method or "gopay")
+            await page.wait_for_timeout(800)
+
+            png = await page.screenshot(full_page=True)
+            print(f"[debug_fill_snapshot] bytes={len(png)}")
+            await context.close(); await browser.close()
+            return png
+        except Exception as e:
+            print("[debug_fill_snapshot] error:", e)
+            try:
+                snap = await page.screenshot(full_page=True)
+                await context.close(); await browser.close()
+                return snap
+            except:
+                await context.close(); await browser.close()
+                return None
