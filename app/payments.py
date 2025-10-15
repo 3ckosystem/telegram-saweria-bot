@@ -1,7 +1,8 @@
 # app/payments.py
-import uuid, time, json, os
+import uuid, time, json, os, base64, asyncio
 import httpx
 from . import storage
+from .scraper import fetch_qr_png
 
 BASE_URL = os.getenv("BASE_URL", "")
 SAWERIA_CREATE_URL = os.getenv("SAWERIA_CREATE_URL")  # e.g., https://api.saweria.id/v1/invoices
@@ -45,28 +46,27 @@ async def _create_invoice_via_saweria(user_id: int, groups: list[str], amount: i
 
     return {"provider_invoice_id": provider_invoice_id, "qr_string": qr_string}
 
+async def _scrape_and_store(invoice_id: str, amount: int):
+    try:
+        # method dibaca dari ENV di dalam scraper
+        png = await fetch_qr_png(amount, f"INV:{invoice_id}")
+        if not png: return
+        import base64
+        b64 = base64.b64encode(png).decode()
+        data_url = f"data:image/png;base64,{b64}"
+        storage.update_qris_payload(invoice_id, data_url)
+    except Exception as e:
+        print("[scraper] error:", e)
+
 async def create_invoice(user_id: int, groups: list[str], amount: int):
     inv_id = str(uuid.uuid4())
-
-    # simpan dulu sebagai PENDING
     storage.upsert_invoice({
-        "invoice_id": inv_id,
-        "user_id": user_id,
-        "groups_json": json.dumps(groups),
-        "amount": amount,
-        "status": "PENDING",
-        "created_at": int(time.time()),
+        "invoice_id": inv_id, "user_id": user_id,
+        "groups_json": json.dumps(groups), "amount": amount,
+        "status": "PENDING", "created_at": int(time.time()),
     })
-
-    try:
-        res = await _create_invoice_via_saweria(user_id, groups, amount, inv_id)
-        storage.update_qris_payload(inv_id, res["qr_string"])
-        return {"invoice_id": inv_id, "qr": res["qr_string"]}
-    except Exception:
-        # Fallback: masih support alur dev tanpa kredensial
-        qr_payload = f"QRIS:SAWERIA:{inv_id}:AMT:{amount}"
-        storage.update_qris_payload(inv_id, qr_payload)
-        return {"invoice_id": inv_id, "qr": qr_payload}
+    asyncio.create_task(_scrape_and_store(inv_id, amount))
+    return {"invoice_id": inv_id, "qr": "pending"}
 
 def mark_paid(invoice_id: str):
     storage.mark_paid(invoice_id)
@@ -74,3 +74,4 @@ def mark_paid(invoice_id: str):
 
 def get_invoice(invoice_id: str):
     return storage.get_invoice(invoice_id)
+
