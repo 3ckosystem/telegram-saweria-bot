@@ -474,23 +474,29 @@ async def fetch_gopay_qr_only_png(amount: int, message: str) -> bytes | None:
 
     # --- util: crop kotak tengah dari poster (fallback) ---
     def center_square_crop(png_bytes: bytes) -> bytes:
-        im = Image.open(BytesIO(png_bytes)).convert("RGB")
-        W, H = im.size
-        # buang margin putih besar dulu (trim kasar)
-        bg = Image.new("RGB", im.size, (255, 255, 255))
-        diff = Image.eval(ImageChops.difference(im, bg), lambda p: p > 10 and 255)
-        bbox = diff.getbbox()
-        if bbox:
-            im = im.crop(bbox)
-            W, H = im.size
-        # ambil persegi terbesar di tengah
-        side = min(W, H)
-        left = (W - side) // 2
-        top  = (H - side) // 2
-        im = im.crop((left, top, left + side, top + side))
+    from io import BytesIO
+    from PIL import Image, ImageChops
 
-        out = BytesIO(); im.save(out, format="PNG")
-        return out.getvalue()
+    im = Image.open(BytesIO(png_bytes)).convert("RGB")
+    # trim margin putih
+    bg = Image.new("RGB", im.size, (255, 255, 255))
+    # beda lalu threshold ringan
+    diff = ImageChops.difference(im, bg)
+    # sedikit perkuat kontras lalu dapetin bbox non-putih
+    bbox = diff.convert("L").point(lambda p: 255 if p > 10 else 0).getbbox()
+    if bbox:
+        im = im.crop(bbox)
+
+    W, H = im.size
+    side = min(W, H)
+    left = (W - side) // 2
+    top  = (H - side) // 2
+    im = im.crop((left, top, left + side, top + side))
+
+    out = BytesIO()
+    im.save(out, format="PNG")
+    return out.getvalue()
+
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
