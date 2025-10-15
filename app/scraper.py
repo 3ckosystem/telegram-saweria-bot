@@ -414,43 +414,82 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
             await context.close(); await browser.close()
             return None
 
-# app/scraper.py — REPLACE fungsi ini saja
+# app/scraper.py — REPLACE fungsi ini
 
 async def fetch_gopay_qr_only_png(amount: int, message: str) -> bytes | None:
     """
     Isi form -> klik 'Kirim Dukungan' -> tunggu checkout GoPay
-    -> ambil HANYA gambar QR (high-res, element screenshot).
+    -> ambil HANYA QR matrix (high-res). Prefer crop via DOM (canvas/img persegi),
+       fallback: potong dari poster jadi kotak di tengah dengan PIL.
     """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
         return None
 
+    from io import BytesIO
+    from PIL import Image
     from playwright.async_api import Error as PWError
 
-    async def find_qr_handle_on(node: Page | Frame):
-        """
-        Cari handle elemen QR pada node (Page/Frame).
-        Prioritas: canvas -> img dataURL -> img alt*QR -> testid umum.
-        """
-        selectors = [
-            # paling umum dulu
+    # --- util: pilih kandidat elemen yang paling 'persegi' & besar ---
+    async def pick_square_qr_candidate(node: Page | Frame):
+        # kumpulkan semua canvas & img yg berpotensi QR
+        handles = []
+        for q in [
             "canvas",
             'img[src^="data:image"]',
-            'img[alt*="QR" i]',
-            '[data-testid="qrcode"] img',
-            '[class*="qrcode" i] img',
-            # variasi lain yang sering muncul
-            'img[alt*="QRIS" i]',
-            '[role="img"][aria-label*="QR" i]',
-        ]
-        for sel in selectors:
+            'img[alt*=\"QR\" i]',
+            '[data-testid=\"qrcode\"] img',
+            '[class*=\"qrcode\" i] img',
+            'img[alt*=\"QRIS\" i]',
+        ]:
             try:
-                el = await node.wait_for_selector(sel, timeout=3500)
-                if el:
-                    return el
-            except PWError:
+                hs = await node.query_selector_all(q)
+                handles.extend(hs)
+            except:
                 pass
-        return None
+        if not handles:
+            return None
+
+        best = None
+        best_score = -1.0
+        for h in handles:
+            try:
+                box = await h.evaluate("""el => {
+                  const r = el.getBoundingClientRect();
+                  return {w: r.width, h: r.height};
+                }""")
+                w = float(box["w"]); h = float(box["h"])
+                if w < 80 or h < 80:  # terlalu kecil, skip
+                    continue
+                ratio = min(w, h) / max(w, h)          # makin dekat 1 makin kotak
+                area  = w * h
+                score = ratio * (area ** 0.5)          # bobot ukuran + kepersegi-an
+                if score > best_score:
+                    best_score = score
+                    best = h
+            except:
+                pass
+        return best
+
+    # --- util: crop kotak tengah dari poster (fallback) ---
+    def center_square_crop(png_bytes: bytes) -> bytes:
+        im = Image.open(BytesIO(png_bytes)).convert("RGB")
+        W, H = im.size
+        # buang margin putih besar dulu (trim kasar)
+        bg = Image.new("RGB", im.size, (255, 255, 255))
+        diff = Image.eval(ImageChops.difference(im, bg), lambda p: p > 10 and 255)
+        bbox = diff.getbbox()
+        if bbox:
+            im = im.crop(bbox)
+            W, H = im.size
+        # ambil persegi terbesar di tengah
+        side = min(W, H)
+        left = (W - side) // 2
+        top  = (H - side) // 2
+        im = im.crop((left, top, left + side, top + side))
+
+        out = BytesIO(); im.save(out, format="PNG")
+        return out.getvalue()
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -464,57 +503,50 @@ async def fetch_gopay_qr_only_png(amount: int, message: str) -> bytes | None:
             user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
             viewport={"width": 1366, "height": 960},
-            device_scale_factor=3,           # lebih tajam
+            device_scale_factor=3,       # bikin tajam
             locale="id-ID",
             timezone_id="Asia/Jakarta",
         )
         page = await context.new_page()
         try:
-            # 1) profil + isi form + pilih GoPay
+            # 1) profil + isi form
             await page.goto(PROFILE_URL, wait_until="domcontentloaded")
             await page.wait_for_timeout(600)
             await page.mouse.wheel(0, 500)
             await _fill_without_submit(page, amount, message, "gopay")
 
-            # 2) klik "Kirim Dukungan" -> dapat checkout target
+            # 2) submit → checkout
             target = await _click_donate_and_get_checkout_page(page, context)
-            # node utama untuk dicari QR (page / frame)
             node = target["frame"] if target["frame"] else (target["page"] or page)
 
-            # 3) langsung cari QR di node utamanya
-            qr_el = await find_qr_handle_on(node)
+            # 3) coba cari elemen QR yang benar-benar persegi di node utama
+            qr_el = await pick_square_qr_candidate(node)
 
-            # 4) kalau belum ketemu, scan semua frame (kadang QR ada di iframe lain)
+            # 4) kalau belum ketemu, scan semua frame checkout
             if not qr_el:
-                # kumpulkan kandidat frame "checkout"
-                frames = node.page.frames if hasattr(node, "page") else (page.frames)
+                frames = node.page.frames if hasattr(node, "page") else page.frames
                 for fr in frames:
                     url = (fr.url or "").lower()
                     if any(k in url for k in ["gopay","qris","xendit","midtrans","snap","checkout","pay"]):
-                        qr_el = await find_qr_handle_on(fr)
+                        qr_el = await pick_square_qr_candidate(fr)
                         if qr_el:
-                            print("[scraper] QR found in frame:", url[:120])
+                            print("[scraper] square QR found in frame:", url[:100])
                             break
 
-            # 5) kalau tetap ga ketemu, coba cari di page biasa sebagai fallback
-            if not qr_el:
-                qr_el = await find_qr_handle_on(page)
-
-            if not qr_el:
-                # masih belum—kirim panel checkout biar kelihatan konteksnya
-                panel = await _find_qr_or_checkout_panel(node) or node
-                png = await (panel.screenshot() if hasattr(panel, "screenshot") else node.screenshot(full_page=True))
-                print("[scraper] WARN: QR not found; fallback panel/page:", len(png))
+            if qr_el:
+                await qr_el.scroll_into_view_if_needed()
+                png = await qr_el.screenshot()
+                print("[scraper] captured square QR element:", len(png))
                 await context.close(); await browser.close()
                 return png
 
-            # 6) screenshot elemen QR saja (auto crop tajam)
-            await qr_el.scroll_into_view_if_needed()
-            png = await qr_el.screenshot()
-            print("[scraper] captured QR element only:", len(png))
-
+            # 5) fallback: screenshot poster → crop kotak tengah
+            panel = await _find_qr_or_checkout_panel(node) or node
+            poster = await (panel.screenshot() if hasattr(panel, "screenshot") else node.screenshot(full_page=True))
+            cropped = center_square_crop(poster)
+            print("[scraper] fallback poster->center-square:", len(cropped))
             await context.close(); await browser.close()
-            return png
+            return cropped
 
         except Exception as e:
             print("[scraper] error(fetch_gopay_qr_only_png):", e)
@@ -525,6 +557,7 @@ async def fetch_gopay_qr_only_png(amount: int, message: str) -> bytes | None:
                 pass
             await context.close(); await browser.close()
             return None
+
 
 
 # ---------- entrypoints ----------
