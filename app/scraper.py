@@ -386,24 +386,15 @@ async def _find_qr_or_checkout_panel(node):
 
 async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
     """
-    Alur: buka profil -> isi form -> pilih GoPay -> klik 'Kirim Dukungan'
-          -> tunggu halaman/iframe pembayaran -> screenshot QR / panel.
+    Buka profil → isi form → pilih GoPay → klik 'Kirim Dukungan'
+    → tunggu halaman/iframe pembayaran → screenshot poster/QR
+    → timpa tulisan 'saweria.co' & 'Dicetak oleh: GoPay' dengan putih.
     """
-
-    el = await _find_qr_or_checkout_panel(node)
-    if el:
-        await el.scroll_into_view_if_needed()
-        png = await el.screenshot()          # poster penuh
-    else:
-        # fallback: screenshot halaman
-        if target["page"]:
-            png = await target["page"].screenshot(full_page=True)
-        else:
-            png = await page.screenshot(full_page=True)
-
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
         return None
+
+    from playwright.async_api import Error as PWError
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -418,38 +409,36 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
             timezone_id="Asia/Jakarta",
         )
         page = await context.new_page()
+
         try:
             # 1) buka profil & isi form
             await page.goto(PROFILE_URL, wait_until="domcontentloaded")
             await page.wait_for_timeout(700)
             await page.mouse.wheel(0, 480)
-
             await _fill_without_submit(page, amount, message, "gopay")
 
-            # 2) klik "Kirim Dukungan"
+            # 2) klik "Kirim Dukungan" → dapat target checkout (tab/iframe/same page)
             target = await _click_donate_and_get_checkout_page(page, context)
-
-            # 3) pilih node (page atau frame) untuk dicari QR
             node = target["frame"] if target["frame"] else (target["page"] or page)
 
-            # 4) cari QR / panel lalu screenshot
+            # 3) cari elemen QR/panel; kalau tidak ada, screenshot halaman
             el = await _find_qr_or_checkout_panel(node)
             if el:
                 await el.scroll_into_view_if_needed()
-                png = await el.screenshot()
-                png = mask_poster_text(png)      # timpa tulisan dengan putih
-                return png
-                print("[scraper] captured CHECKOUT panel PNG:", len(png))
+                png = await el.screenshot()                     # poster penuh / panel
             else:
-                # fallback screenshot halaman
-                if target["page"]:
-                    png = await target["page"].screenshot(full_page=True)
-                else:
-                    png = await page.screenshot(full_page=True)
-                print("[scraper] WARN: no specific QR element; page screenshot:", len(png))
+                png = await (target["page"] or page).screenshot(full_page=True)
+
+            # 4) MASK — timpa tulisan dengan pita putih
+            # (sesuaikan band kalau masih ada sisa teks)
+            png = mask_poster_text(
+                png,
+                top_band=(0.22, 0.33),      # area "saweria.co"
+                bottom_band=(0.78, 0.90),   # area "Dicetak oleh: GoPay"
+                margin_x=0.07,              # 7% kiri/kanan
+            )
 
             await context.close(); await browser.close()
-            png = mask_poster_text(png)
             return png
 
         except Exception as e:
@@ -461,7 +450,7 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
                 pass
             await context.close(); await browser.close()
             return None
-
+        
 # app/scraper.py — REPLACE fungsi ini saja
 
 async def fetch_gopay_qr_only_png(amount: int, message: str) -> bytes | None:
@@ -483,7 +472,7 @@ async def fetch_gopay_qr_only_png(amount: int, message: str) -> bytes | None:
         selectors = [
             # paling umum dulu
             "canvas",
-            'img[src^="data:image"]',
+            'img[src^="data:image"]', 
             'img[alt*="QR" i]',
             '[data-testid="qrcode"] img',
             '[class*="qrcode" i] img',
