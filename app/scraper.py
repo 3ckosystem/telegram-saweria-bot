@@ -545,4 +545,4 @@ async def debug_fill_snapshot(amount: int, message: str, method: str = "gopay") 
                 return snap
             except:
                 await context.close(); await browser.close()
-                return None
+                return None 
