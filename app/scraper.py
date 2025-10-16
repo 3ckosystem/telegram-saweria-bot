@@ -1,6 +1,11 @@
 # app/scraper.py
-# Isi form Saweria + pilih GoPay (tanpa submit) lalu screenshot.
-# ENV: SAWERIA_USERNAME  (contoh: "3ckosystem")
+# ------------------------------------------------------------
+# Isi form Saweria + pilih GoPay (tanpa submit) → klik "Kirim Dukungan"
+# → tangkap halaman/iframe checkout (panel/QR).
+#
+# ENV:
+#   SAWERIA_USERNAME  (contoh: "3ckosystem")
+# ------------------------------------------------------------
 
 import os, re, uuid
 from typing import Optional
@@ -9,8 +14,8 @@ from playwright.async_api import async_playwright, Page, Frame
 SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "").strip()
 PROFILE_URL = f"https://saweria.co/{SAWERIA_USERNAME}" if SAWERIA_USERNAME else None
 
-# Set True bila validasi form masih tidak kebaca (akan memicu event via JS)
-FORCE_DISPATCH = False
+# Paksa event input/change supaya binding reaktif di halaman terpicu
+FORCE_DISPATCH = True
 
 
 # ---------- util umum ----------
@@ -32,6 +37,7 @@ async def _find_payment_root(node: Page | Frame):
             pass
     return None
 
+
 async def _scan_all_frames_for_visual(page: Page):
     el = await _find_payment_root(page)
     if el:
@@ -48,14 +54,23 @@ async def _scan_all_frames_for_visual(page: Page):
             return el
     return None
 
+
 async def _maybe_dispatch(page: Page, handle):
     """Opsional: paksa event input/change bila FORCE_DISPATCH=True."""
     if not FORCE_DISPATCH or handle is None:
         return
     try:
-        await page.evaluate("(e)=>{e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));}", handle)
+        await page.evaluate(
+            "(e)=>{"
+            " if(!e) return;"
+            " e.dispatchEvent(new Event('input',{bubbles:true}));"
+            " e.dispatchEvent(new Event('change',{bubbles:true}));"
+            " e.blur && e.blur();"
+            "}", handle
+        )
     except:
         pass
+
 
 async def _try_click(page: Page | Frame, selectors, timeout_each=1600, force=False) -> bool:
     for sel in selectors:
@@ -70,6 +85,63 @@ async def _try_click(page: Page | Frame, selectors, timeout_each=1600, force=Fal
     return False
 
 
+# ---------- helper: pilih GoPay & tunggu Total > 0 ----------
+async def _select_gopay_and_wait_total(page: Page, amount: int):
+    """Klik GoPay dan tunggu 'Total' berubah > 0 (metode ter-apply)."""
+    gopay_selectors = [
+        '[data-testid="gopay-button"]',
+        'button[data-testid="gopay-button"]',
+        'button:has-text("GoPay")',
+        '[role="radio"]:has-text("GoPay")',
+        '[data-testid*="gopay"]',
+    ]
+    clicked = False
+    for sel in gopay_selectors:
+        try:
+            el = await page.wait_for_selector(sel, timeout=2500)
+            await el.scroll_into_view_if_needed()
+            await el.click(force=True)
+            print("[scraper] clicked GoPay via", sel)
+            clicked = True
+            break
+        except:
+            pass
+    if not clicked:
+        print("[scraper] WARN: GoPay button not found")
+
+    # pancing re-render ringan
+    try:
+        await page.keyboard.press("Tab")
+    except:
+        pass
+    await page.wait_for_timeout(200)
+
+    # cek "Jumlah Dukungan: Rp{amount}"
+    try:
+        rupiah = f"{amount:,}".replace(",", ".")
+        await page.get_by_text(re.compile(rf"Jumlah Dukungan:\s*Rp{rupiah}\b")).wait_for(timeout=4000)
+        print("[scraper] amount reflected in UI")
+    except:
+        print("[scraper] WARN: amount not reflected in 'Jumlah Dukungan'")
+
+    # tunggu Total > 0
+    try:
+        await page.wait_for_function("""
+            () => {
+              const el = [...document.querySelectorAll('*')]
+                .find(n => /Total:\s*Rp/i.test(n.textContent||''));
+              if (!el) return false;
+              const m = (el.textContent||'').match(/Total:\s*Rp\s*([\d.]+)/i);
+              if (!m) return false;
+              const num = parseInt(m[1].replace(/\./g,''));
+              return Number.isFinite(num) && num > 0;
+            }
+        """, timeout=6000)
+        print("[scraper] Total > 0 (OK)")
+    except:
+        print("[scraper] WARN: Total still 0 after selecting GoPay")
+
+
 # ---------- isi form TANPA submit ----------
 async def _fill_without_submit(page: Page, amount: int, message: str, method: str):
     # ===== amount =====
@@ -82,15 +154,16 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
         'input[type="number"]',
     ]:
         try:
-            el = await page.wait_for_selector(sel, timeout=2500)
+            el = await page.wait_for_selector(sel, timeout=3000)
             await el.scroll_into_view_if_needed()
             await el.click()
+            # clear
             try:
                 await page.keyboard.press("Control+A")
             except:
                 await page.keyboard.press("Meta+A")
             await page.keyboard.press("Backspace")
-            # gunakan type agar event terpicu karakter demi karakter
+            # ketik
             await el.type(str(amount))
             amount_handle = el
             amount_ok = True
@@ -116,16 +189,10 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
         try:
             el = await page.wait_for_selector(sel, timeout=2000)
             await el.scroll_into_view_if_needed()
-            await el.click()
-            try:
-                await page.keyboard.press("Control+A")
-            except:
-                await page.keyboard.press("Meta+A")
-            await page.keyboard.press("Backspace")
-            await el.type("Budi")
-            print("[scraper] filled name via", sel)
+            await el.fill("Budi")
             await _maybe_dispatch(page, el)
             name_ok = True
+            print("[scraper] filled name via", sel)
             break
         except:
             pass
@@ -137,17 +204,11 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
     email_val = f"donor+{uuid.uuid4().hex[:8]}@example.com"
     for sel in ['input[type="email"]','input[name="email"]','input[placeholder*="email" i]']:
         try:
-            el = await page.wait_for_selector(sel, timeout=1800)
+            el = await page.wait_for_selector(sel, timeout=2000)
             await el.scroll_into_view_if_needed()
-            await el.click()
-            try:
-                await page.keyboard.press("Control+A")
-            except:
-                await page.keyboard.press("Meta+A")
-            await page.keyboard.press("Backspace")
-            await el.type(email_val)
-            print("[scraper] filled email via", sel)
+            await el.fill(email_val)
             await _maybe_dispatch(page, el)
+            print("[scraper] filled email via", sel)
             break
         except:
             pass
@@ -155,73 +216,27 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
 
     # ===== message (Pesan) — INPUT → TEXTAREA → contenteditable =====
     msg_ok = False
-    msg_handle = None
-
-    # 1) INPUT (kasus layout kamu)
     for sel in [
         'input[name="message"]',
         'input[data-testid="message-input"]',
         '#message',
         'input[placeholder*="Selamat pagi" i]',
         'input[placeholder*="pesan" i]',
+        'textarea[name="message"]',
+        'textarea',
     ]:
         try:
             el = await page.wait_for_selector(sel, timeout=1800)
             await el.scroll_into_view_if_needed()
-            await el.click()
-            try:
-                await page.keyboard.press("Control+A")
-            except:
-                await page.keyboard.press("Meta+A")
-            await page.keyboard.press("Backspace")
-            await el.type(message)
+            await el.fill(message)
+            await _maybe_dispatch(page, el)
             msg_ok = True
-            msg_handle = el
-            print("[scraper] filled message via INPUT", sel)
+            print("[scraper] filled message via", sel)
             break
         except:
             pass
-
-    # 2) TEXTAREA
     if not msg_ok:
-        for sel in [
-            'textarea[name="message"]',
-            'textarea[placeholder*="Pesan" i]',
-            'textarea[placeholder*="Selamat pagi" i]',
-            'textarea',
-        ]:
-            try:
-                el = await page.wait_for_selector(sel, timeout=1500)
-                await el.scroll_into_view_if_needed()
-                await el.click()
-                await el.fill(message)  # textarea.fill aman
-                msg_ok = True
-                msg_handle = el
-                print("[scraper] filled message via TEXTAREA", sel)
-                break
-            except:
-                pass
-
-    # 3) contenteditable
-    if not msg_ok:
-        try:
-            el = await page.wait_for_selector('[contenteditable="true"], [contenteditable]', timeout=1500)
-            await el.scroll_into_view_if_needed()
-            await el.click()
-            # clear lalu ketik
-            try:
-                await page.keyboard.press("Control+A")
-            except:
-                await page.keyboard.press("Meta+A")
-            await page.keyboard.press("Backspace")
-            await page.keyboard.type(message)
-            msg_ok = True
-            msg_handle = el
-            print("[scraper] filled message via contenteditable")
-        except:
-            print("[scraper] WARN: message field not found at all")
-
-    await _maybe_dispatch(page, msg_handle)
+        print("[scraper] WARN: message field not found at all")
     await page.wait_for_timeout(200)
 
     # ===== centang checkbox wajib =====
@@ -236,30 +251,24 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
     await page.wait_for_timeout(150)
 
     # ===== pilih metode (GoPay) =====
-    method = (method or "gopay").lower()
-    if method == "gopay":
-        # scroll ke area metode
+    if (method or "gopay").lower() == "gopay":
+        # scroll ke area metode (biar visible)
         try:
-            area = await page.get_by_text(re.compile("Moda pembayaran|Metode pembayaran|GoPay|QRIS", re.I)).element_handle()
+            area = await page.get_by_text(
+                re.compile("Moda pembayaran|Metode pembayaran|GoPay|QRIS", re.I)
+            ).element_handle()
             if area:
                 await area.scroll_into_view_if_needed()
         except:
             await page.mouse.wheel(0, 600)
 
-        clicked = await _try_click(page, [
-            'button:has-text("GoPay")',
-            '[role="radio"]:has-text("GoPay")',
-            '[data-testid*="gopay"]',
-            'text=/\\bGoPay\\b/i',
-        ], force=True)
-        if not clicked:
-            print("[scraper] WARN: GoPay not found; continue anyway")
+        await _select_gopay_and_wait_total(page, amount)
 
     # selesai; TIDAK submit
     await page.wait_for_timeout(350)
 
-# ====== SUBMIT + tangkap halaman pembayaran GoPay ======
 
+# ====== Klik DONATE + ambil target checkout ======
 async def _click_donate_and_get_checkout_page(page, context):
     """
     Klik "Kirim Dukungan" dan kembalikan object 'target' yang berisi:
@@ -267,17 +276,14 @@ async def _click_donate_and_get_checkout_page(page, context):
     - frame  : Frame (jika pembayaran di dalam iframe)
     - root   : element handle panel pembayaran (opsional)
     """
-    # calon tombol
     donate_selectors = [
         'button[data-testid="donate-button"]',
         'button:has-text("Kirim Dukungan")',
         'text=/\\bKirim\\s+Dukungan\\b/i',
     ]
 
-    # siapkan listener new page
     new_page_task = context.wait_for_event("page")
 
-    # klik tombol
     clicked = False
     for sel in donate_selectors:
         try:
@@ -292,20 +298,19 @@ async def _click_donate_and_get_checkout_page(page, context):
     if not clicked:
         raise RuntimeError("Tombol 'Kirim Dukungan' tidak ditemukan")
 
-    # tunggu salah satu: (1) tab baru, (2) same-page nav, (3) muncul iframe
+    # 1) tab baru?
     target_page = None
     try:
         target_page = await new_page_task
     except:
         pass
-
     if target_page:
         await target_page.wait_for_load_state("domcontentloaded")
         await target_page.wait_for_load_state("networkidle")
         print("[scraper] checkout opened in NEW TAB:", target_page.url)
         return {"page": target_page, "frame": None, "root": None}
 
-    # coba same-page navigation
+    # 2) same-page navigation?
     try:
         await page.wait_for_load_state("networkidle", timeout=7000)
         print("[scraper] checkout likely SAME PAGE:", page.url)
@@ -313,29 +318,26 @@ async def _click_donate_and_get_checkout_page(page, context):
     except:
         pass
 
-    # terakhir: coba iframe
+    # 3) iframe?
     for fr in page.frames:
         u = (fr.url or "").lower()
         if any(k in u for k in ["gopay","qris","xendit","midtrans","snap","checkout","pay"]):
             print("[scraper] checkout appears in IFRAME:", u[:120])
             return {"page": None, "frame": fr, "root": None}
 
-    # gagal menemukan target; tetap kembalikan page
     print("[scraper] WARN: fallback to current page for checkout")
     return {"page": page, "frame": None, "root": None}
 
 
 async def _find_qr_or_checkout_panel(node):
-    """
-    Cari elemen QR / panel checkout untuk discreenshot.
-    """
+    """Cari elemen QR / panel checkout untuk discreenshot."""
     selectors = [
         # gambar/canvas QR umum
-        'img[alt*="QR"]',
+        'img[alt*="QR" i]',
         'img[src^="data:image"]',
         '[data-testid="qrcode"] img',
-        'canvas',
-        '[class*="qrcode"] img',
+        '[class*="qrcode" i] img',
+        "canvas",
         # panel pembayaran
         '[data-testid*="checkout" i]',
         '[class*="checkout" i]',
@@ -351,10 +353,11 @@ async def _find_qr_or_checkout_panel(node):
     return None
 
 
+# ---------- menuju halaman pembayaran & screenshot ----------
 async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
     """
-    Alur: buka profil -> isi form -> pilih GoPay -> klik 'Kirim Dukungan'
-          -> tunggu halaman/iframe pembayaran -> screenshot QR / panel.
+    Alur: buka profil → isi form → pilih GoPay → klik 'Kirim Dukungan'
+          → tunggu halaman/iframe pembayaran → screenshot panel (QR / checkout).
     """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
@@ -414,7 +417,8 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> bytes | None:
             await context.close(); await browser.close()
             return None
 
-# ---------- entrypoints ----------
+
+# ---------- entrypoints (tanpa submit, panel di halaman profil) ----------
 async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay") -> bytes | None:
     """
     1) Buka profil
@@ -545,4 +549,4 @@ async def debug_fill_snapshot(amount: int, message: str, method: str = "gopay") 
                 return snap
             except:
                 await context.close(); await browser.close()
-                return None 
+                return None
