@@ -101,7 +101,9 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
     if not amount_ok:
         print("[scraper] WARN: amount field not found")
     await _maybe_dispatch(page, amount_handle)
+    await page.keyboard.press("Tab")   # trigger blur/validasi
     await page.wait_for_timeout(200)
+
 
     # ===== name (Dari) =====
     name_ok = False
@@ -260,69 +262,130 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
 
 # ====== SUBMIT + tangkap halaman pembayaran GoPay ======
 
-async def _click_donate_and_get_checkout_page(page, context):
+async def _click_donate_and_get_checkout_page(page: Page, context):
     """
-    Klik "Kirim Dukungan" dan kembalikan object 'target' yang berisi:
-    - page   : Page (jika membuka tab baru / same-page nav)
-    - frame  : Frame (jika pembayaran di dalam iframe)
-    - root   : element handle panel pembayaran (opsional)
+    Klik 'Kirim Dukungan' dengan robust:
+    - pastikan tombol enabled & terlihat
+    - paksa blur agar validasi/total ter-update
+    - tunggu: tab baru / same-page / iframe checkout
     """
-    # calon tombol
-    donate_selectors = [
-        'button[data-testid="donate-button"]',
-        'button:has-text("Kirim Dukungan")',
-        'text=/\\bKirim\\s+Dukungan\\b/i',
+    from playwright.async_api import TimeoutError as PWTimeout
+
+    # 1) Pastikan tombol ada
+    donate_locators = [
+        page.get_by_test_id("donate-button"),
+        page.locator('button:has-text("Kirim Dukungan")'),
+        page.locator('text=/\\bKirim\\s+Dukungan\\b/i'),
     ]
-
-    # siapkan listener new page
-    new_page_task = context.wait_for_event("page")
-
-    # klik tombol
-    clicked = False
-    for sel in donate_selectors:
+    donate = None
+    for loc in donate_locators:
         try:
-            el = await page.wait_for_selector(sel, timeout=3000)
-            await el.scroll_into_view_if_needed()
-            await el.click()
-            print("[scraper] clicked DONATE via", sel)
-            clicked = True
+            await loc.wait_for(state="visible", timeout=4000)
+            donate = loc
             break
         except:
             pass
-    if not clicked:
+    if donate is None:
         raise RuntimeError("Tombol 'Kirim Dukungan' tidak ditemukan")
 
-    # tunggu salah satu: (1) tab baru, (2) same-page nav, (3) muncul iframe
+    # 2) Paksa blur agar form/total terhitung
+    try:
+        await page.keyboard.press("Tab")
+        await page.wait_for_timeout(150)
+        await page.evaluate("""
+            () => {
+              const ev = (name)=>new Event(name,{bubbles:true});
+              document.querySelectorAll('input,textarea,select').forEach(el=>{
+                el.dispatchEvent(ev('input')); el.dispatchEvent(ev('change')); el.blur?.();
+              });
+            }
+        """)
+        await page.wait_for_timeout(250)
+    except:
+        pass
+
+    # 3) Pastikan tombol enabled
+    try:
+        await page.wait_for_function(
+            """(btn) => {
+                 if (!btn) return false;
+                 const disabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true';
+                 const hidden = btn.offsetParent === null;
+                 return !disabled && !hidden;
+               }""",
+            donate.element_handle(),
+            timeout=4000
+        )
+    except PWTimeout:
+        # tetap dicoba klik paksa
+        pass
+
+    # 4) Siapkan listener tab baru
+    new_page_task = context.wait_for_event("page")
+
+    # 5) Scroll ke tombol & klik (beberapa layout perlu force)
+    try:
+        await donate.scroll_into_view_if_needed()
+    except:
+        pass
+    clicked = False
+    for click_try in range(3):
+        try:
+            await donate.click(force=True)
+            clicked = True
+            print("[scraper] DONATE clicked (try", click_try+1, ")")
+            break
+        except:
+            await page.wait_for_timeout(250)
+
+    if not clicked:
+        # terakhir: paksa via JS
+        try:
+            handle = await donate.element_handle()
+            if handle:
+                await page.evaluate("(b)=>b.click()", handle)
+                clicked = True
+                print("[scraper] DONATE clicked via JS")
+        except:
+            pass
+
+    if not clicked:
+        raise RuntimeError("Gagal klik tombol 'Kirim Dukungan'")
+
+    # 6) Tentukan target checkout
     target_page = None
     try:
-        target_page = await new_page_task
-    except:
+        target_page = await new_page_task.wait_for(timeout=7000)
+    except Exception:
         pass
 
     if target_page:
         await target_page.wait_for_load_state("domcontentloaded")
-        await target_page.wait_for_load_state("networkidle")
+        try:
+            await target_page.wait_for_load_state("networkidle", timeout=8000)
+        except PWTimeout:
+            pass
         print("[scraper] checkout opened in NEW TAB:", target_page.url)
         return {"page": target_page, "frame": None, "root": None}
 
-    # coba same-page navigation
+    # same-page?
     try:
-        await page.wait_for_load_state("networkidle", timeout=7000)
+        await page.wait_for_load_state("networkidle", timeout=8000)
         print("[scraper] checkout likely SAME PAGE:", page.url)
         return {"page": page, "frame": None, "root": None}
-    except:
+    except PWTimeout:
         pass
 
-    # terakhir: coba iframe
+    # iframe?
     for fr in page.frames:
         u = (fr.url or "").lower()
         if any(k in u for k in ["gopay","qris","xendit","midtrans","snap","checkout","pay"]):
             print("[scraper] checkout appears in IFRAME:", u[:120])
             return {"page": None, "frame": fr, "root": None}
 
-    # gagal menemukan target; tetap kembalikan page
     print("[scraper] WARN: fallback to current page for checkout")
     return {"page": page, "frame": None, "root": None}
+
 
 
 async def _find_qr_or_checkout_panel(node):
