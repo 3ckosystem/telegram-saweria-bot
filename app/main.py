@@ -202,6 +202,13 @@ async def debug_saweria_pay(amount: int = 25000, msg: str = "INV:debug"):
         raise HTTPException(500, "Gagal menuju halaman pembayaran")
     return Response(content=png, media_type="image/png")
 
+@app.get("/debug/saweria-qr-hd")
+async def debug_saweria_qr_hd(amount: int = 25000, msg: str = "INV:qr-hd"):
+    from .scraper import fetch_gopay_qr_hd_png
+    png = await fetch_gopay_qr_hd_png(amount, msg)
+    if not png:
+        raise HTTPException(500, "Gagal ambil QR HD")
+    return Response(content=png, media_type="image/png")
 
 # ------------- STARTUP / SHUTDOWN -------------
 @app.on_event("startup")
