@@ -1,5 +1,5 @@
 # app/main.py
-import os, json, re, base64, hmac, hashlib, io, httpx
+import os, json, re, base64, hmac, hashlib, httpx
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException, Query
@@ -11,15 +11,14 @@ from telegram import Update
 from telegram.ext import Application
 
 from .bot import build_app, register_handlers, send_invite_link
-from . import payments, storage
-
+from . import payments, storage, scraper
 from .scraper import debug_snapshot, debug_fill_snapshot, fetch_gopay_checkout_png, fetch_gopay_qr_hd_png
 
 # ------------- ENV -------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BASE_URL = os.environ["BASE_URL"].strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
-ENV = os.getenv("ENV", "dev")  # set "prod" di Railway untuk mematikan debug endpoints
+ENV = os.getenv("ENV", "dev")
 GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "[]")
 try:
     GROUPS: List[str] = [
@@ -42,10 +41,8 @@ app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webap
 # ------------- TELEGRAM WEBHOOK -------------
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
-    # optional secret validation
     if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
         raise HTTPException(403, "Invalid secret")
-
     data = await request.json()
     update = Update.de_json(data, bot_app.bot)
     await bot_app.process_update(update)
@@ -60,14 +57,11 @@ class CreateInvoiceIn(BaseModel):
 # ------------- API: CREATE INVOICE -------------
 @app.post("/api/invoice")
 async def create_invoice(payload: CreateInvoiceIn):
-    # validasi group id terhadap ENV (opsional, aman jika kosong)
     valid = set(GROUPS) if GROUPS else None
     if valid:
         for gid in payload.groups:
             if gid not in valid:
                 raise HTTPException(400, f"Invalid group {gid}")
-
-    # trigger invoice + background capture (via payments)
     inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
     return inv
 
@@ -79,7 +73,6 @@ def invoice_status(invoice_id: str):
     st = payments.get_status(invoice_id)
     if not st:
         raise HTTPException(404, "Invoice not found")
-    # contoh balikan: {"status":"PENDING"|"PAID","paid_at":..., "has_qr": true|false}
     return st
 
 @app.get("/api/qr/{invoice_id}")
@@ -90,7 +83,7 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
 
     payload = inv.get("qris_payload")
 
-    # Opsi 1: payload dari DB (hasil background)
+    # 1) payload dari DB (cache)
     if payload:
         m = _DATA_URL_RE.match(payload)
         if not m:
@@ -102,10 +95,10 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
             headers={"Cache-Control": "public, max-age=300"}
         )
 
-    # Opsi 2: belum ada → coba tunggu sebentar (optional)
+    # 2) tunggu sebentar (opsional)
     if wait and isinstance(wait, int) and wait > 0:
         import asyncio
-        for _ in range(min(wait, 8)):   # max ~8 detik
+        for _ in range(min(wait, 8)):
             await asyncio.sleep(1)
             inv2 = payments.get_invoice(invoice_id)
             payload2 = inv2.get("qris_payload") if inv2 else None
@@ -120,13 +113,29 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
                     headers={"Cache-Control": "public, max-age=300"}
                 )
 
-    # Opsi 3: fallback HD on-demand supaya MiniApp tidak gagal
+    # 3) fallback HD on-demand: coba selesaikan task scrape yang mungkin sedang berjalan
     if hd:
         amount = inv.get("amount") or 0
+        try:
+            await payments.ensure_qr_scraped(invoice_id, amount)
+            inv3 = payments.get_invoice(invoice_id)
+            payload3 = inv3.get("qris_payload") if inv3 else None
+            if payload3:
+                m = _DATA_URL_RE.match(payload3)
+                if m:
+                    mime, b64 = m.groups()
+                    return Response(
+                        content=base64.b64decode(b64),
+                        media_type=mime,
+                        headers={"Cache-Control": "public, max-age=300"}
+                    )
+        except Exception:
+            pass
+
+        # jika masih kosong → scrape langsung terakhir
         msg = f"INV:{invoice_id}"
         png = await fetch_gopay_qr_hd_png(amount, msg)
         if png:
-            # (opsional) cache ke DB biar request berikutnya makin cepat
             try:
                 b64 = base64.b64encode(png).decode()
                 payments.storage.update_qris_payload(invoice_id, f"data:image/png;base64,{b64}")
@@ -138,11 +147,9 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
                 headers={"Cache-Control": "public, max-age=300"}
             )
 
-    # Kalau semua gagal
     raise HTTPException(404, "PNG not ready")
 
 # ------------- SAWERIA WEBHOOK (opsional) -------------
-# Jika kamu sudah menghubungkan webhook Saweria untuk tandai pembayaran "PAID"
 class SaweriaWebhookIn(BaseModel):
     status: str
     invoice_id: Optional[str] = None
@@ -169,14 +176,12 @@ async def saweria_webhook(request: Request):
     if data.status.lower() != "paid":
         return {"ok": True}
 
-    # tandai invoice paid (gunakan message atau external_id/invoice_id sesuai implementasi kamu)
     inv = None
     if data.invoice_id:
         inv = payments.mark_paid(data.invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
 
-    # kirim undangan ke semua grup terkait
     groups = json.loads(inv["groups_json"])
     for gid in groups:
         try:
@@ -200,7 +205,6 @@ if ENV != "prod":
     def debug_invite_logs(invoice_id: str):
         return {"invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
 
-# ---- DEBUG: tes HTTP fetch langsung (tanpa Chromium) ----
 @app.get("/debug/fetch-saweria")
 async def debug_fetch_saweria():
     username = os.getenv("SAWERIA_USERNAME", "").strip()
@@ -214,7 +218,6 @@ async def debug_fetch_saweria():
         })
     return {"url": url, "status": r.status_code, "len": len(r.text), "snippet": r.text[:300]}
 
-# ---- DEBUG: ambil PNG dari Chromium (Playwright) ----
 @app.get("/debug/saweria-snap")
 async def debug_saweria_snap():
     png = await debug_snapshot()
@@ -247,6 +250,13 @@ async def debug_saweria_qr_hd(amount: int = 25000, msg: str = "INV:qr-hd"):
 @app.on_event("startup")
 async def on_start():
     await bot_app.initialize()
+
+    # Warm-up Playwright agar cold start hilang
+    try:
+        await scraper.warmup_browser()
+    except Exception as e:
+        print("[startup] warmup_browser error:", e)
+
     if BASE_URL.startswith("https://"):
         await bot_app.bot.set_webhook(
             url=f"{BASE_URL}/telegram/webhook",
