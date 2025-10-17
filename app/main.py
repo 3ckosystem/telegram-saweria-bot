@@ -17,6 +17,11 @@ from .scraper import debug_snapshot
 from .scraper import debug_fill_snapshot
 from .scraper import fetch_gopay_checkout_png
 
+from fastapi import Query
+import base64
+from .scraper import fetch_gopay_qr_hd_png  # sudah ada, dipakai /debug/saweria-qr-hd
+
+
 
 # ------------- ENV -------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -86,20 +91,45 @@ def invoice_status(invoice_id: str):
     return st
 
 @app.get("/api/qr/{invoice_id}")
-def qr_png(invoice_id: str):
+async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0)):
     inv = payments.get_invoice(invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    payload = inv.get("qris_payload")
-    if not payload:
-        raise HTTPException(404, "PNG not ready")
 
-    # payload disimpan sebagai data URL: data:image/png;base64,...
-    m = _DATA_URL_RE.match(payload)
-    if not m:
-        raise HTTPException(400, "Bad image payload")
-    mime, b64 = m.groups()
-    return Response(content=base64.b64decode(b64), media_type=mime)
+    payload = inv.get("qris_payload")
+
+    # Opsi 1: sudah ada payload (hasil background)
+    if payload:
+        m = _DATA_URL_RE.match(payload)
+        if not m:
+            raise HTTPException(400, "Bad image payload")
+        mime, b64 = m.groups()
+        return Response(content=base64.b64decode(b64), media_type=mime)
+
+    # Opsi 2: belum ada → coba tunggu sebentar (optional)
+    if wait and isinstance(wait, int) and wait > 0:
+        import asyncio
+        for _ in range(min(wait, 8)):   # max ~8 detik
+            await asyncio.sleep(1)
+            inv = payments.get_invoice(invoice_id)
+            payload = inv.get("qris_payload") if inv else None
+            if payload:
+                m = _DATA_URL_RE.match(payload)
+                if not m:
+                    break
+                mime, b64 = m.groups()
+                return Response(content=base64.b64decode(b64), media_type=mime)
+
+    # Opsi 3: fallback HD on-demand, supaya MiniApp tidak gagal
+    if hd:
+        amount = inv.get("amount") or 0
+        msg = f"INV:{invoice_id}"
+        png = await fetch_gopay_qr_hd_png(amount, msg)
+        if png:
+            return Response(content=png, media_type="image/png")
+
+    # Kalau semua gagal
+    raise HTTPException(404, "PNG not ready")
 
 # ------------- SAWERIA WEBHOOK (opsional) -------------
 # Jika kamu sudah menghubungkan webhook Saweria untuk tandai pembayaran "PAID"
