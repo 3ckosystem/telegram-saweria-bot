@@ -22,7 +22,7 @@ function htmlEscape(s) {
 
 async function renderGroups() {
   const groups = (window.injectedGroups || [
-    { id: "-1002593237267", label: "Group M" },
+    { id: "-1002593237267", label: "Group Model" },
     { id: "-1001320707949", label: "Group A" },
     { id: "-1002306015599", label: "Group S" },
   ]);
