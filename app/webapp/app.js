@@ -1,10 +1,10 @@
 // app/webapp/app.js
-// Telegram Mini App client untuk flow Saweria (GoPay) dengan fallback QR HD on-demand
+// Telegram Mini App client for Saweria flow (GoPay scraper only-show-if-ready)
 
 const tg = window.Telegram?.WebApp;
 tg?.expand();
 
-// (opsional) link bantu langsung ke halaman Saweria kamu
+// (opsional) link bantu
 const yourSaweriaUrl = "https://saweria.co/3ckosystem";
 
 function getUserId() {
@@ -31,15 +31,14 @@ async function renderGroups() {
   wrap.innerHTML = "";
   groups.forEach((g) => {
     const el = document.createElement("label");
+    el.style.display = "block";
     el.innerHTML = `<input type="checkbox" value="${g.id}"/> ${htmlEscape(g.label)}`;
     wrap.appendChild(el);
   });
 }
 renderGroups();
 
-document.getElementById("pay")?.addEventListener("click", onPay);
-
-async function onPay() {
+document.getElementById("pay")?.addEventListener("click", async () => {
   const selected = [...document.querySelectorAll("#groups input:checked")].map(i => i.value);
   const amount = parseInt(document.getElementById("amount")?.value || "0", 10);
 
@@ -53,7 +52,7 @@ async function onPay() {
     return;
   }
 
-  // Create invoice
+  // Buat invoice
   let inv;
   try {
     const res = await fetch(`${window.location.origin}/api/invoice`, {
@@ -62,7 +61,7 @@ async function onPay() {
       body: JSON.stringify({ user_id: userId, groups: selected, amount }),
     });
     if (!res.ok) throw new Error(await res.text());
-    inv = await res.json(); // { invoice_id }
+    inv = await res.json();
   } catch (e) {
     document.getElementById("qr").innerHTML =
       `<div style="color:#c00">Create invoice gagal: ${htmlEscape(e.message || String(e))}</div>`;
@@ -74,6 +73,7 @@ async function onPay() {
   qrContainer.innerHTML = `
     <div><b>Pembayaran GoPay</b></div>
     <div id="qruistate" style="margin:8px 0 12px 0; opacity:.85">Menyiapkan QRIS GoPay…</div>
+    <!-- QR akan disisipkan DI SINI hanya jika siap -->
     <div style="margin-top:8px"><b>Kode pembayaran:</b> <code id="invcode">${htmlEscape(ref)}</code>
       <button id="copyinv" style="margin-left:6px">Copy</button>
     </div>
@@ -89,7 +89,7 @@ async function onPay() {
     </div>
   `;
 
-  // Copy button
+  // tombol copy
   document.getElementById('copyinv')?.addEventListener('click', async () => {
     await navigator.clipboard.writeText(ref);
     const btn = document.getElementById('copyinv');
@@ -97,37 +97,44 @@ async function onPay() {
     setTimeout(() => (btn.textContent = "Copy"), 1500);
   });
 
+  // === POLLING: cek QR dari scraper (GoPay) ===
   const statusUrl = `${window.location.origin}/api/invoice/${inv.invoice_id}/status`;
-  const baseQrUrl = `${window.location.origin}/api/qr/${inv.invoice_id}`;
-
-  // === Tampilkan QR instan via HD on-demand, dengan auto-retry ===
+  const qrUrl = `${window.location.origin}/api/qr/${inv.invoice_id}`;
   const stateEl = document.getElementById('qruistate');
-  const img = document.createElement('img');
-  img.id = 'qrimg';
-  img.alt = 'GoPay QR';
-  img.style = 'max-width:240px;border:1px solid #eee;padding:6px;border-radius:8px;display:block;margin-bottom:8px';
-  qrContainer.insertBefore(img, document.getElementById('invcode').parentElement);
 
-  let tries = 0;
-  const maxTries = 10;
-  function loadQR() {
-    // pakai hd=1 (fallback backend akan ambil QR HD on-demand)
-    img.src = `${baseQrUrl}?hd=1&t=${Date.now()}`;
-  }
-  img.onerror = () => {
-    tries++;
-    if (tries < maxTries) {
-      setTimeout(loadQR, 1200);
-    } else if (stateEl) {
-      stateEl.innerHTML = `<span style="color:#c00">QRIS gagal dimuat.</span>`;
+  let triesQR = 0;
+  let qrShown = false;
+  const pollQR = async () => {
+    triesQR++;
+    try {
+      const r = await fetch(statusUrl);
+      if (r.ok) {
+        const s = await r.json();
+        if (s.has_qr) {
+          // render IMG hanya jika QR siap
+          if (!qrShown) {
+            const img = document.createElement('img');
+            img.id = 'qrimg';
+            img.alt = 'GoPay QR';
+            img.style = 'max-width:240px;border:1px solid #eee;padding:6px;border-radius:8px';
+            img.src = `${qrUrl}?t=${Date.now()}`; // cache buster
+            qrContainer.insertBefore(img, document.getElementById('invcode').parentElement);
+            qrShown = true;
+            if (stateEl) stateEl.textContent = "QRIS GoPay siap. Silakan scan dengan GoPay.";
+          }
+          return; // berhenti polling QR
+        }
+      }
+    } catch (_) {}
+    if (triesQR < 10) {
+      setTimeout(pollQR, 1500);
+    } else {
+      if (!qrShown && stateEl) stateEl.innerHTML = `<span style="color:#c00">QRIS gagal dimuat.</span>`;
     }
   };
-  img.onload = () => {
-    if (stateEl) stateEl.textContent = "QRIS GoPay siap. Silakan scan dengan GoPay.";
-  };
-  loadQR();
+  setTimeout(pollQR, 800);
 
-  // === POLLING status pembayaran (auto-close saat PAID) ===
+  // === POLLING: status pembayaran (auto-close saat PAID) ===
   let pollPaidTimer = setInterval(checkPaid, 2000);
   document.getElementById('btn-done')?.addEventListener("click", () => checkPaid(true));
 
@@ -147,4 +154,4 @@ async function onPay() {
       }
     } catch (_) {}
   }
-}
+});
