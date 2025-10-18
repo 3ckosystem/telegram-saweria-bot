@@ -1,10 +1,7 @@
 # app/payments.py
 # Buat invoice, jalankan scraper HD di background, lalu simpan PNG ke qris_payload (data URL).
 
-import uuid
-import time
-import json
-import asyncio
+import uuid, time, json, asyncio
 import base64
 from typing import List, Optional, Dict, Any
 
@@ -13,13 +10,13 @@ from .scraper import fetch_gopay_qr_hd_png   # gunakan HD langsung (lebih cepat 
 
 
 # ------------ Helpers (passthrough ke storage) ------------
-def get_invoice(invoice_id: str) -> Optional[Dict[str, Any]]:
+def get_invoice(invoice_id: str):
     return storage.get_invoice(invoice_id)
 
-def list_invoices(limit: int = 20) -> List[Dict[str, Any]]:
+def list_invoices(limit: int = 20):
     return storage.list_invoices(limit)
 
-def mark_paid(invoice_id: str) -> Optional[Dict[str, Any]]:
+def mark_paid(invoice_id: str):
     return storage.mark_paid(invoice_id)
 
 
@@ -43,23 +40,9 @@ async def _scrape_and_store(invoice_id: str, amount: int) -> None:
 
 
 # ------------ Public API ------------
-async def create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[str, str]:
-    """
-    Membuat invoice PENDING dan langsung memicu pengambilan QR HD di background.
-    """
-    # Validasi ringan (tidak kaku, agar UX tetap mulus)
-    try:
-        amount = int(amount)
-    except Exception:
-        amount = 0
-    if amount <= 0:
-        # tetap buat invoice untuk konsistensi flow, tapi log agar mudah dilacak
-        print(f"[payments] WARN: amount <= 0 for user={user_id}")
-
-    if not isinstance(groups, list):
-        groups = []
-
+async def create_invoice(user_id: int, groups: list[str], amount: int):
     inv_id = str(uuid.uuid4())
+    # simpan dulu, qris_payload akan berupa URL png siap dipanggil oleh <img>
     storage.upsert_invoice({
         "invoice_id": inv_id,
         "user_id": user_id,
@@ -67,25 +50,13 @@ async def create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[s
         "amount": amount,
         "status": "PENDING",
         "created_at": int(time.time()),
-        "qris_payload": None,   # akan terisi oleh scraper async
+        # langsung isi dengan URL generator (tidak perlu nunggu scraper selesai)
+        "qris_payload": f"/api/qr/{inv_id}.png?amount={amount}&msg=INV:{inv_id}",
     })
-
-    # Trigger background capture segera (non-blocking)
-    try:
-        asyncio.create_task(_scrape_and_store(inv_id, amount))
-    except Exception as e:
-        # fallback: jalankan langsung (blocking) agar tetap ada QR (jarang terjadi)
-        print("[payments] create_task failed, running inline:", e)
-        await _scrape_and_store(inv_id, amount)
-
     return {"invoice_id": inv_id}
 
 
-def get_status(invoice_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Mengembalikan status ringkas untuk polling MiniApp.
-    Contoh: {"status":"PENDING"|"PAID","paid_at":..., "has_qr": true|false}
-    """
+def get_status(invoice_id: str):
     inv = storage.get_invoice(invoice_id)
     if not inv:
         return None
