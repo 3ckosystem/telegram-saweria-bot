@@ -655,4 +655,4 @@ async def fetch_gopay_qr_hd_png(amount: int, message: str) -> bytes | None:
         except:
             pass
         await context.close()
-        return None``
+        return None
