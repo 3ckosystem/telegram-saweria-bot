@@ -16,8 +16,11 @@ from . import payments, storage
 from .scraper import debug_snapshot, debug_fill_snapshot, fetch_gopay_checkout_png, fetch_gopay_qr_hd_png
 
 # ------------- ENV -------------
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-BASE_URL = os.environ["BASE_URL"].strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+BASE_URL = (os.getenv("BASE_URL") or "").strip()
+if not BOT_TOKEN or not BASE_URL:
+    raise RuntimeError("Missing required env: BOT_TOKEN or BASE_URL")
+
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 ENV = os.getenv("ENV", "dev")  # set "prod" di Railway untuk mematikan debug endpoints
 GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "[]")
