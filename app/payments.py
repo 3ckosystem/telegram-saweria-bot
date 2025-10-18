@@ -1,8 +1,6 @@
 # app/payments.py
 # Buat invoice, jalankan scraper HD di background, lalu simpan PNG ke qris_payload (data URL).
 
-from __future__ import annotations
-
 import uuid
 import time
 import json
@@ -11,7 +9,7 @@ import base64
 from typing import List, Optional, Dict, Any
 
 from . import storage
-from . import s1  # import modul (hindari import langsung fungsi)
+from .s1 import fetch_gopay_qr_hd_png   # gunakan HD langsung (lebih cepat & tajam)
 
 # hindari double-scrape untuk invoice yang sama
 _inflight: dict[str, asyncio.Task] = {}
@@ -27,7 +25,7 @@ def mark_paid(invoice_id: str) -> Optional[Dict[str, Any]]:
 
 async def _scrape_and_store(invoice_id: str, amount: int) -> None:
     try:
-        png = await s1.fetch_gopay_qr_hd_png(amount, f"INV:{invoice_id}")
+        png = await fetch_gopay_qr_hd_png(amount, f"INV:{invoice_id}")
         if not png:
             print(f"[scraper] ERROR: no HD PNG for {invoice_id}")
             return
@@ -70,6 +68,7 @@ async def create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[s
         "qris_payload": None,
     })
 
+    # background scrape (non-blocking)
     try:
         asyncio.create_task(ensure_qr_scraped(inv_id, amount))
     except Exception as e:
@@ -87,3 +86,4 @@ def get_status(invoice_id: str) -> Optional[Dict[str, Any]]:
         "paid_at": inv.get("paid_at"),
         "has_qr": bool(inv.get("qris_payload")),
     }
+ 
