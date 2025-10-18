@@ -5,7 +5,7 @@ const tg = window.Telegram?.WebApp;
 tg?.expand();
 
 // (opsional) link bantu
-const yourSaweriaUrl = "https://saweria.co/3ckosystem";
+const yourSaweriaUrl = "https://saweria.co/payments";
 
 function getUserId() {
   const fromInit = tg?.initDataUnsafe?.user?.id;

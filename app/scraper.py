@@ -4,7 +4,7 @@
 # → tangkap halaman/iframe checkout (panel/QR).
 #
 # ENV:
-#   SAWERIA_USERNAME  (contoh: "3ckosystem")
+#   SAWERIA_USERNAME  (contoh: "payments")
 # ------------------------------------------------------------
 
 import os, re, uuid, base64
