@@ -2,7 +2,7 @@
 import os, json, re, base64, hmac, hashlib, httpx
 from typing import Optional, List
 
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -11,8 +11,9 @@ from telegram import Update
 from telegram.ext import Application
 
 from .bot import build_app, register_handlers, send_invite_link
-from . import p1, s1, storage
-from .s1 import debug_snapshot, debug_fill_snapshot, fetch_gopay_checkout_png, fetch_gopay_qr_hd_png
+from . import payments, storage
+
+from .scraper import debug_snapshot, debug_fill_snapshot, fetch_gopay_checkout_png, fetch_gopay_qr_hd_png
 
 # ------------- ENV -------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -62,7 +63,9 @@ async def create_invoice(payload: CreateInvoiceIn):
         for gid in payload.groups:
             if gid not in valid:
                 raise HTTPException(400, f"Invalid group {gid}")
-    inv = await p1.create_invoice(payload.user_id, payload.groups, payload.amount)
+
+    # trigger invoice + background capture (via payments)
+    inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
     return inv
 
 # ------------- API: STATUS & QR IMAGE -------------
@@ -83,37 +86,29 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
 
     payload = inv.get("qris_payload")
 
-    # 1) payload dari DB (cache)
+    # Opsi 1: payload dari DB (hasil background)
     if payload:
         m = _DATA_URL_RE.match(payload)
         if not m:
             raise HTTPException(400, "Bad image payload")
         mime, b64 = m.groups()
-        return Response(
-            content=base64.b64decode(b64),
-            media_type=mime,
-            headers={"Cache-Control": "public, max-age=300"}
-        )
+        return Response(content=base64.b64decode(b64), media_type=mime)
 
     # 2) tunggu sebentar (opsional)
     if wait and isinstance(wait, int) and wait > 0:
         import asyncio
         for _ in range(min(wait, 8)):
             await asyncio.sleep(1)
-            inv2 = p1.get_invoice(invoice_id)
+            inv2 = payments.get_invoice(invoice_id)
             payload2 = inv2.get("qris_payload") if inv2 else None
             if payload2:
                 m = _DATA_URL_RE.match(payload2)
                 if not m:
                     break
                 mime, b64 = m.groups()
-                return Response(
-                    content=base64.b64decode(b64),
-                    media_type=mime,
-                    headers={"Cache-Control": "public, max-age=300"}
-                )
+                return Response(content=base64.b64decode(b64), media_type=mime)
 
-    # 3) fallback HD on-demand: coba selesaikan task scrape yang mungkin sedang berjalan
+    # Opsi 3: fallback HD on-demand supaya MiniApp tidak gagal
     if hd:
         amount = inv.get("amount") or 0
         try:
@@ -136,9 +131,10 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
         msg = f"INV:{invoice_id}"
         png = await fetch_gopay_qr_hd_png(amount, msg)
         if png:
+            # (opsional) cache ke DB biar request berikutnya makin cepat
             try:
                 b64 = base64.b64encode(png).decode()
-                p1.storage.update_qris_payload(invoice_id, f"data:image/png;base64,{b64}")
+                payments.storage.update_qris_payload(invoice_id, f"data:image/png;base64,{b64}")
             except Exception:
                 pass
             return Response(
@@ -176,12 +172,15 @@ async def saweria_webhook(request: Request):
     if data.status.lower() != "paid":
         return {"ok": True}
 
+    # tandai invoice paid (gunakan message atau external_id/invoice_id sesuai implementasi kamu)
     inv = None
     if data.invoice_id:
         inv = p1.mark_paid(data.invoice_id)
     if not inv:
+        # kalau tidak ketemu, abaikan atau log
         raise HTTPException(404, "Invoice not found")
 
+    # kirim undangan ke semua grup terkait
     groups = json.loads(inv["groups_json"])
     for gid in groups:
         try:
@@ -216,7 +215,12 @@ async def debug_fetch_saweria():
             "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
         })
-    return {"url": url, "status": r.status_code, "len": len(r.text), "snippet": r.text[:300]}
+    return {
+        "url": url,
+        "status": r.status_code,
+        "len": len(r.text),
+        "snippet": r.text[:300]
+    }
 
 @app.get("/debug/saweria-snap")
 async def debug_saweria_snap():
@@ -241,6 +245,7 @@ async def debug_saweria_pay(amount: int = 25000, msg: str = "INV:debug"):
 
 @app.get("/debug/saweria-qr-hd")
 async def debug_saweria_qr_hd(amount: int = 25000, msg: str = "INV:qr-hd"):
+    from .scraper import fetch_gopay_qr_hd_png
     png = await fetch_gopay_qr_hd_png(amount, msg)
     if not png:
         raise HTTPException(500, "Gagal ambil QR HD")

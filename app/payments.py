@@ -9,10 +9,7 @@ import base64
 from typing import List, Optional, Dict, Any
 
 from . import storage
-from .s1 import fetch_gopay_qr_hd_png   # gunakan HD langsung (lebih cepat & tajam)
-
-# hindari double-scrape untuk invoice yang sama
-_inflight: dict[str, asyncio.Task] = {}
+from .scraper import fetch_gopay_qr_hd_png   # <-- gunakan HD
 
 def get_invoice(invoice_id: str) -> Optional[Dict[str, Any]]:
     return storage.get_invoice(invoice_id)
@@ -25,14 +22,15 @@ def mark_paid(invoice_id: str) -> Optional[Dict[str, Any]]:
 
 async def _scrape_and_store(invoice_id: str, amount: int) -> None:
     try:
+        # ambil QR HD (langsung unduh PNG asli dari <img src=".../qr-code">)
         png = await fetch_gopay_qr_hd_png(amount, f"INV:{invoice_id}")
         if not png:
-            print(f"[scraper] ERROR: no HD PNG for {invoice_id}")
+            print(f"[scraper] ERROR: no PNG for {invoice_id}")
             return
         b64 = base64.b64encode(png).decode()
         data_url = f"data:image/png;base64,{b64}"
         storage.update_qris_payload(invoice_id, data_url)
-        print(f"[scraper] ok: stored HD PNG for {invoice_id} (len={len(png)})")
+        print(f"[scraper] ok: stored PNG for {invoice_id} (len={len(png)})")
     except Exception as e:
         print("[scraper] error in _scrape_and_store:", e)
 
