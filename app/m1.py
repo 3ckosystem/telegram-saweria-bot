@@ -1,6 +1,4 @@
 # app/main.py
-from __future__ import annotations
-
 import os, json, re, base64, hmac, hashlib, httpx
 from typing import Optional, List
 
@@ -13,7 +11,8 @@ from telegram import Update
 from telegram.ext import Application
 
 from .bot import build_app, register_handlers, send_invite_link
-from . import p1, s1, storage  # ← pakai import modul, bukan import fungsi langsung
+from . import p1, s1, storage
+from .s1 import debug_snapshot, debug_fill_snapshot, fetch_gopay_checkout_png, fetch_gopay_qr_hd_png
 
 # ------------- ENV -------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -114,7 +113,7 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
                     headers={"Cache-Control": "public, max-age=300"}
                 )
 
-    # 3) fallback HD on-demand (selesaikan task berjalan dulu agar tidak double)
+    # 3) fallback HD on-demand: coba selesaikan task scrape yang mungkin sedang berjalan
     if hd:
         amount = inv.get("amount") or 0
         try:
@@ -133,8 +132,9 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
         except Exception:
             pass
 
-        # jika tetap kosong → scrape langsung terakhir
-        png = await s1.fetch_gopay_qr_hd_png(amount, f"INV:{invoice_id}")
+        # jika masih kosong → scrape langsung terakhir
+        msg = f"INV:{invoice_id}"
+        png = await fetch_gopay_qr_hd_png(amount, msg)
         if png:
             try:
                 b64 = base64.b64encode(png).decode()
@@ -218,31 +218,30 @@ async def debug_fetch_saweria():
         })
     return {"url": url, "status": r.status_code, "len": len(r.text), "snippet": r.text[:300]}
 
-# ---- DEBUG SNAPSHOTS ----
 @app.get("/debug/saweria-snap")
 async def debug_saweria_snap():
-    png = await s1.debug_snapshot()
+    png = await debug_snapshot()
     if not png:
         raise HTTPException(500, "Gagal snapshot (lihat logs)")
     return Response(content=png, media_type="image/png")
 
 @app.get("/debug/saweria-fill")
 async def debug_saweria_fill(amount: int = 25000, msg: str = "INV:debug", method: str = "gopay"):
-    png = await s1.debug_fill_snapshot(amount, msg, method)
+    png = await debug_fill_snapshot(amount, msg, method)
     if not png:
         raise HTTPException(500, "Gagal snapshot setelah pengisian form (lihat logs)")
     return Response(content=png, media_type="image/png")
 
 @app.get("/debug/saweria-pay")
 async def debug_saweria_pay(amount: int = 25000, msg: str = "INV:debug"):
-    png = await s1.fetch_gopay_checkout_png(amount, msg)
+    png = await fetch_gopay_checkout_png(amount, msg)
     if not png:
         raise HTTPException(500, "Gagal menuju halaman pembayaran")
     return Response(content=png, media_type="image/png")
 
 @app.get("/debug/saweria-qr-hd")
 async def debug_saweria_qr_hd(amount: int = 25000, msg: str = "INV:qr-hd"):
-    png = await s1.fetch_gopay_qr_hd_png(amount, msg)
+    png = await fetch_gopay_qr_hd_png(amount, msg)
     if not png:
         raise HTTPException(500, "Gagal ambil QR HD")
     return Response(content=png, media_type="image/png")
@@ -251,6 +250,7 @@ async def debug_saweria_qr_hd(amount: int = 25000, msg: str = "INV:qr-hd"):
 @app.on_event("startup")
 async def on_start():
     await bot_app.initialize()
+
     # Warm-up Playwright agar cold start hilang
     try:
         await s1.warmup_browser()
