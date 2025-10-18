@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from telegram import Update
 from telegram.ext import Application
-
+#test
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
 
