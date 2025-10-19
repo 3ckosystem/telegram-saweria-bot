@@ -1,5 +1,5 @@
 # app/main.py
-import os, json, re, base64, hmac, hashlib, io, httpx
+import os, json, re, base64, hmac, hashlib, httpx
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException, Query
@@ -13,7 +13,13 @@ from telegram.ext import Application
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
 
-from .scraper import debug_snapshot, debug_fill_snapshot, fetch_gopay_checkout_png, fetch_gopay_qr_hd_png
+# === penting: import nama fungsi yang benar
+from .scraper import (
+    debug_snapshot,
+    debug_fill_snapshot,
+    fetch_gopay_checkout_png,
+    fetch_gopay_qr_hd_png,   # <- betul (png)
+)
 
 # ------------- ENV -------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -23,6 +29,7 @@ if not BOT_TOKEN or not BASE_URL:
 
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 ENV = os.getenv("ENV", "dev")  # set "prod" di Railway untuk mematikan debug endpoints
+
 GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "[]")
 try:
     GROUPS: List[str] = [
@@ -86,14 +93,21 @@ def invoice_status(invoice_id: str):
     return st
 
 @app.get("/api/qr/{invoice_id}")
-async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0)):
+async def qr_png(
+    invoice_id: str,
+    hd: bool = Query(False, description="Force scrape QR HD if not cached"),
+    wait: int = Query(0, description="Seconds to wait for background cache"),
+):
     inv = payments.get_invoice(invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
 
-    payload = inv.get("qris_payload")
+    # siapkan nilai-nilai ini di awal agar bisa dipakai di semua jalur
+    amount = inv.get("amount") or 0
+    msg = f"INV:{invoice_id}"
 
     # Opsi 1: payload dari DB (hasil background)
+    payload = inv.get("qris_payload")
     if payload:
         m = _DATA_URL_RE.match(payload)
         if not m:
@@ -102,7 +116,7 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
         return Response(
             content=base64.b64decode(b64),
             media_type=mime,
-            headers={"Cache-Control": "public, max-age=300"}
+            headers={"Cache-Control": "public, max-age=300"},
         )
 
     # Opsi 2: belum ada → coba tunggu sebentar (optional)
@@ -120,29 +134,36 @@ async def qr_png(invoice_id: str, hd: bool = Query(False), wait: int = Query(0))
                 return Response(
                     content=base64.b64decode(b64),
                     media_type=mime,
-                    headers={"Cache-Control": "public, max-age=300"}
+                    headers={"Cache-Control": "public, max-age=300"},
                 )
 
     # Opsi 3: fallback HD on-demand supaya MiniApp tidak gagal
-    if hd:
-        amount = inv.get("amount") or 0
-        msg = f"INV:{invoice_id}"
-        png = await fetch_gopay_qr_hd_png(amount, msg)
-        if png:
-            # (opsional) cache ke DB biar request berikutnya makin cepat
-            try:
-                b64 = base64.b64encode(png).decode()
-                payments.storage.update_qris_payload(invoice_id, f"data:image/png;base64,{b64}")
-            except Exception:
-                pass
-            return Response(
-                content=png,
-                media_type="image/png",
-                headers={"Cache-Control": "public, max-age=300"}
-            )
+    try:
+        if hd:
+            png = await fetch_gopay_qr_hd_png(amount, msg)
+            if png:
+                # (opsional) cache ke DB biar request berikutnya makin cepat
+                try:
+                    b64 = base64.b64encode(png).decode()
+                    # gunakan modul storage langsung
+                    storage.update_qris_payload(invoice_id, f"data:image/png;base64,{b64}")
+                except Exception:
+                    pass
+                return Response(
+                    content=png,
+                    media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=300"},
+                )
 
-    # Kalau semua gagal
-    raise HTTPException(404, "PNG not ready")
+        # Jika tidak minta hd atau hd gagal, masih coba sekali lagi untuk jaga-jaga
+        png = await fetch_gopay_qr_hd_png(amount, msg)
+        if not png:
+            return Response(content=b"QR not found", status_code=502)
+        return Response(content=png, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=120"})
+    except Exception as e:
+        print("[qr_png] error:", e)
+        return Response(content=b"Error", status_code=500)
 
 # ------------- SAWERIA WEBHOOK (opsional) -------------
 # Jika kamu sudah menghubungkan webhook Saweria untuk tandai pembayaran "PAID"
