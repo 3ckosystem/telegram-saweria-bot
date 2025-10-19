@@ -58,7 +58,7 @@ async def create_invoice(user_id: int, groups: list[str], amount: int):
 
 def get_status(invoice_id: str):
     inv = storage.get_invoice(invoice_id)
-    if not inv:
+    if not inv:qr_png
         return None
     return {
         "status": inv["status"],

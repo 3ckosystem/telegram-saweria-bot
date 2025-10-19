@@ -92,21 +92,38 @@ def invoice_status(invoice_id: str):
     # contoh balikan: {"status":"PENDING"|"PAID","paid_at":..., "has_qr": true|false}
     return st
 
-@app.get("/api/qr/{invoice_id}")
+# --- ganti seluruh fungsi ini ---
+@app.get("/api/qr/{raw_id}")
 async def qr_png(
-    invoice_id: str,
+    raw_id: str,
     hd: bool = Query(False, description="Force scrape QR HD if not cached"),
     wait: int = Query(0, description="Seconds to wait for background cache"),
+    amount: int | None = Query(None, description="(legacy) amount for on-demand"),
+    msg: str | None = Query(None, description="(legacy) message for on-demand"),
 ):
+    # 1) Normalisasi ID: izinkan .../{invoice_id}.png atau .jpg
+    invoice_id = re.sub(r"\.(png|jpg|jpeg)$", "", raw_id, flags=re.I)
+
+    # 2) Ambil invoice dari DB
     inv = payments.get_invoice(invoice_id)
     if not inv:
+        # fallback super-legacy: kalau belum ada di DB tapi ada amount+msg, kita masih
+        # coba hasilkan QR on-demand supaya tidak blank (opsional)
+        if amount and msg:
+            try:
+                png = await fetch_gopay_qr_hd_png(int(amount), msg)
+                if png:
+                    return Response(content=png, media_type="image/png",
+                                    headers={"Cache-Control": "public, max-age=120"})
+            except Exception as e:
+                print("[qr_png] legacy-fallback error:", e)
         raise HTTPException(404, "Invoice not found")
 
-    # siapkan nilai-nilai ini di awal agar bisa dipakai di semua jalur
-    amount = inv.get("amount") or 0
-    msg = f"INV:{invoice_id}"
+    # siapkan nilai umum
+    amt = inv.get("amount") or amount or 0
+    message = f"INV:{invoice_id}"
 
-    # Opsi 1: payload dari DB (hasil background)
+    # 3) Jika sudah ada payload di DB → langsung kirim
     payload = inv.get("qris_payload")
     if payload:
         m = _DATA_URL_RE.match(payload)
@@ -119,10 +136,10 @@ async def qr_png(
             headers={"Cache-Control": "public, max-age=300"},
         )
 
-    # Opsi 2: belum ada → coba tunggu sebentar (optional)
+    # 4) Tunggu sebentar background (opsional)
     if wait and isinstance(wait, int) and wait > 0:
         import asyncio
-        for _ in range(min(wait, 8)):   # max ~8 detik
+        for _ in range(min(wait, 8)):
             await asyncio.sleep(1)
             inv2 = payments.get_invoice(invoice_id)
             payload2 = inv2.get("qris_payload") if inv2 else None
@@ -137,33 +154,28 @@ async def qr_png(
                     headers={"Cache-Control": "public, max-age=300"},
                 )
 
-    # Opsi 3: fallback HD on-demand supaya MiniApp tidak gagal
+    # 5) Generate on-demand (HD) + cache ke DB 
     try:
-        if hd:
-            png = await fetch_gopay_qr_hd_png(amount, msg)
-            if png:
-                # (opsional) cache ke DB biar request berikutnya makin cepat
-                try:
-                    b64 = base64.b64encode(png).decode()
-                    # gunakan modul storage langsung
-                    storage.update_qris_payload(invoice_id, f"data:image/png;base64,{b64}")
-                except Exception:
-                    pass
-                return Response(
-                    content=png,
-                    media_type="image/png",
-                    headers={"Cache-Control": "public, max-age=300"},
-                )
-
-        # Jika tidak minta hd atau hd gagal, masih coba sekali lagi untuk jaga-jaga
-        png = await fetch_gopay_qr_hd_png(amount, msg)
+        png = await fetch_gopay_qr_hd_png(amt, message)
         if not png:
             return Response(content=b"QR not found", status_code=502)
-        return Response(content=png, media_type="image/png",
-                        headers={"Cache-Control": "public, max-age=120"})
+
+        try:
+            b64 = base64.b64encode(png).decode()
+            storage.update_qris_payload(invoice_id, f"data:image/png;base64,{b64}")
+        except Exception:
+            pass
+
+        return Response(
+            content=png,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=300"},
+        )
     except Exception as e:
         print("[qr_png] error:", e)
         return Response(content=b"Error", status_code=500)
+# --- sampai sini ---
+
 
 # ------------- SAWERIA WEBHOOK (opsional) -------------
 # Jika kamu sudah menghubungkan webhook Saweria untuk tandai pembayaran "PAID"
