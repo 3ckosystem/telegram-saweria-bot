@@ -1,26 +1,104 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="id">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>EnSEXlopedia Mini Apps</title>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <style>
-    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
-    #qr img { max-width: 240px; border:1px solid #eee; padding:6px; border-radius:8px }
-    button { padding:8px 12px; border-radius:8px; border:1px solid #ddd; background:#f5f5f5 }
-  </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>SAOP NOW</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="./styles.css" />
+  <script>
+    window.tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+    if (tg) { tg.expand(); tg.ready(); }
+  </script>
 </head>
 <body>
-  <h3>Pilih Grup</h3>
-  <div id="groups"></div>
+  <div class="app-shell">
+    <!-- HEADER -->
+    <header class="app-header">
+      <div class="status-notch"></div>
+      <h1 class="brand">SAOP NOW</h1>
+      <button class="cta" id="ctaShop" type="button">SHOP NOW</button>
+    </header>
 
-  <label>Nominal (IDR): <input id="amount" type="number" value="25000"/></label>
-  <div style="margin-top:8px">
-    <button id="pay">Lanjut Pembayaran (QRIS)</button>
+    <!-- SCREEN: CATALOG -->
+    <main class="content screen" id="screenCatalog" data-screen="catalog">
+      <h2 class="section-title">Featured</h2>
+      <section class="grid" id="groupGrid"></section>
+    </main>
+
+    <!-- SCREEN: CONFIRM -->
+    <main class="content screen is-hidden" id="screenConfirm" data-screen="confirm">
+      <h2 class="section-title">Konfirmasi Pesanan</h2>
+      <div id="confirmSummary" class="confirm-summary"></div>
+
+      <div class="card notice">
+        <p>Pastikan pilihan grup dan nominal sudah sesuai. Klik <b>Lanjutkan Pembayaran</b> untuk membuat invoice.</p>
+      </div>
+
+      <div class="actions">
+        <button class="btn-outline" id="btnBackToCatalog" type="button">Kembali</button>
+        <button class="btn-primary" id="btnProceedPayment" type="button">Lanjutkan Pembayaran</button>
+      </div>
+    </main>
+
+    <!-- SCREEN: PAYMENT -->
+    <main class="content screen is-hidden" id="screenPayment" data-screen="payment">
+      <h2 class="section-title">Pembayaran GoPay</h2>
+
+      <div class="card">
+        <div class="kv">
+          <div>Invoice</div>
+          <div id="invId">–</div>
+        </div>
+        <div class="kv">
+          <div>Total</div>
+          <div id="invAmount">–</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <p id="qrisStatus">QRIS GoPay siap. Silakan scan dengan aplikasi GoPay.</p>
+        <div class="qris-wrap">
+          <img id="qrisImage" alt="QRIS" />
+        </div>
+        <div class="code-row">
+          <span class="code-label">Kode pembayaran:</span>
+          <span id="payCode" class="code-value">–</span>
+          <button class="btn-chip" id="btnCopyCode" type="button">Copy</button>
+        </div>
+        <ol class="qr-help">
+          <li>Jika perlu, buka: <a id="saweriaLink" href="#" target="_blank" rel="noopener">https://saweria.co/payments</a></li>
+          <li>Tempel kode di kolom <em>pesan</em> sebelum bayar (opsional bila scan QR).</li>
+        </ol>
+      </div>
+
+      <div class="actions">
+        <button class="btn-outline" id="btnDone" type="button">Selesai</button>
+      </div>
+    </main>
+
+    <!-- BOTTOM BAR -->
+    <footer class="cart-bar" id="cartBar" aria-live="polite">
+      <div class="total">Total: <span id="totalText">Rp0</span></div>
+      <button class="checkout" id="btnCheckout" type="button">CHECKOUT</button>
+    </footer>
   </div>
 
-  <div id="qr" style="margin-top:16px;"></div>
+  <!-- Template kartu -->
+  <template id="tplGroupCard">
+    <article class="card">
+      <div class="card-media"><img alt="" loading="lazy" /></div>
+      <div class="card-title"></div>
+      <div class="card-actions">
+        <button class="btn-add" type="button">Tambahkan ke&nbsp;Keranjang</button>
+        <button class="btn-remove is-hidden" type="button">Hapus</button>
+      </div>
+    </article>
+  </template>
 
   <script src="./app.js"></script>
 </body>
