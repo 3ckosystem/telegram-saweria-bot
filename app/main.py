@@ -47,11 +47,7 @@ bot_app: Application = build_app()
 register_handlers(bot_app)
 
 # Serve Mini App statics
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# --- ROUTER BARU: checkout/invoice/QRIS ---
-from .checkout import router as checkout_router
-app.include_router(checkout_router, prefix="/api")
+app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
 
 # ------------- TELEGRAM WEBHOOK -------------
 @app.post("/telegram/webhook")
