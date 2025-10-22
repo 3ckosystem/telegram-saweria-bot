@@ -1,6 +1,5 @@
 # app/main.py
 import os, json, re, base64, hmac, hashlib, httpx
-import payments
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException, Query
@@ -94,6 +93,8 @@ async def telegram_webhook(request: Request):
     return JSONResponse({"ok": True})
 
 
+
+# ------------- API: CREATE INVOICE -------------
 # ------------- API: CREATE INVOICE -------------
 class CreateInvoiceIn(BaseModel):
     user_id: int
@@ -126,10 +127,7 @@ async def create_invoice(payload: CreateInvoiceIn):
 
     # --- CALL payments.create_invoice dengan proteksi error
     try:
-        id_to_initial = {str(g['id']): str(g.get('initial','')).strip() for g in GROUPS}
-        initials = [id_to_initial.get(str(gid), '') for gid in payload.groups]
-        message = ' '.join([s.strip() for s in initials if s.strip()])
-        inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount, message=message)
+        inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
         # bentuk response minimal agar UI jalan
         return inv  # biasanya: {"invoice_id": "...", "status": "PENDING", "qr_url": "...", ...}
     except Exception as e:

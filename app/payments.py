@@ -19,15 +19,15 @@ from .scraper import fetch_gopay_qr_hd_png
 
 
 # ---------- util: panggil fungsi storage yang mungkin beda nama ----------
-def _storage_create_invoice(user_id: int, groups: List[str], amount: int, message: str = "") -> Dict[str, Any]:
+def _storage_create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[str, Any]:
     """
     Coba beberapa kemungkinan nama fungsi di storage agar fleksibel.
     Return: dict invoice (harus mengandung invoice_id / amount / groups_json / status, dsb.)
     """
     if hasattr(storage, "create_invoice"):
-        return storage.create_invoice(user_id, groups, amount, message=message)  # type: ignore[attr-defined]
+        return storage.create_invoice(user_id, groups, amount)  # type: ignore[attr-defined]
     if hasattr(storage, "add_invoice"):
-        return storage.add_invoice(user_id, groups, amount, message=message)  # type: ignore[attr-defined]
+        return storage.add_invoice(user_id, groups, amount)  # type: ignore[attr-defined]
     # fallback terakhir: bikin lewat API yang umum kalau ada
     raise RuntimeError("storage.create_invoice / add_invoice tidak ditemukan")
 
@@ -66,11 +66,21 @@ def _storage_list_invoices(limit: int = 20) -> List[Dict[str, Any]]:
 
 
 # ---------- API yang dipakai main.py ----------
-def create_invoice(user_id: int, groups: List[str], amount: int, message: str = "") -> Dict[str, Any]:
+async def create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[str, Any]:
     """
-    Buat invoice di DB. (QR / Saweria flow kamu tetap di tempat lain seperti semula)
+    Buat invoice + jadwalkan background job untuk ambil QR HD
+    (agar endpoint /api/qr bisa langsung serve dari DB saat siap).
     """
-    inv = storage.create_invoice(user_id=user_id, groups=groups, amount=amount, message=message)
+    inv = _storage_create_invoice(user_id, groups, amount)
+
+    # Fire-and-forget background task to prewarm QR
+    try:
+        asyncio.create_task(_bg_generate_qr(inv["invoice_id"], amount))
+    except Exception:
+        # Kalau lingkungan tidak mendukung asyncio.create_task (mis. sync),
+        # ya tidak apa-apa — endpoint /api/qr masih bisa generate on-demand.
+        pass
+
     return inv
 
 
