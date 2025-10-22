@@ -16,11 +16,15 @@ async function loadConfigAndRender() {
     const box = document.getElementById('groups');
     if (box) {
       box.innerHTML = '';
+      // saat render dari cfg.groups:
       (LOADED_GROUPS || []).forEach(g => {
         const id = String(g.id);
         const name = String(g.name ?? id);
-        const row = document.createElement('div');
-        row.innerHTML = `<label><input type="checkbox" value="${id}"/> ${name}</label>`;
+        const initial = String(g.initial ?? "").trim();  // <— ambil initial
+
+        const row = document.createElement('label');
+        row.style.display = 'block';
+        row.innerHTML = `<input type="checkbox" value="${id}" data-initial="${initial}"/> ${name}`;
         box.appendChild(row);
       });
     }
@@ -198,6 +202,19 @@ function recalcAmountFromGroups() {
   } catch (_) {}
 }
 
+function syncInitialPreview() {
+  try {
+    const checked = [...document.querySelectorAll('#groups input[type="checkbox"]:checked')];
+    const initials = checked
+      .map(i => (i.dataset.initial || "").trim())
+      .filter(Boolean);
+    // Tampilkan format "M A S" — ganti join('') kalau mau "MAS"
+    const msg = initials.join(' ');
+    const el = document.getElementById('msg-preview');
+    if (el) el.textContent = msg ? `Pesan: ${msg}` : '';
+  } catch {}
+}
+
 // Pasang event listener delegasi pada container groups
 (function initGroupRecalc() {
   const container = document.getElementById('groups');
@@ -207,10 +224,14 @@ function recalcAmountFromGroups() {
     const t = e.target;
     if (t && t.matches && t.matches('input[type="checkbox"]')) {
       recalcAmountFromGroups();
+      syncInitialPreview()
     }
   });
   // Recalc saat awal render juga (jaga-jaga jika ada default tercentang)
-  setTimeout(recalcAmountFromGroups, 0);
+  setTimeout(() => { 
+  recalcAmountFromGroups();
+  syncInitialPreview();          // <— tambahkan
+}, 0);
 })();
 
 
