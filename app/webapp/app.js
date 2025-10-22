@@ -8,7 +8,7 @@ const state = {
   cart: new Set(),
 };
 
-const $ = s => document.querySelector(s);
+const $   = s => document.querySelector(s);
 const idr = n => (n||0).toLocaleString("id-ID");
 const esc = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const buildUrl = p => (API_BASE ? `${API_BASE}${p}` : p);

@@ -1,125 +1,104 @@
 # app/main.py
-import os, json, re, base64, hmac, hashlib, httpx, io
-from typing import Optional, List
+import os, json, re, base64, io
+from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from telegram import Update
-from telegram.ext import Application
-
-from .bot import build_app, register_handlers, send_invite_link
+# ----------------- import layer project -----------------
+# Pastikan modul ini sudah ada di project kamu (sesuai repo sebelumnya)
 from . import payments, storage
 
-# === penting: import nama fungsi yang benar
-from .scraper import (
-    debug_snapshot,
-    debug_fill_snapshot,
-    fetch_gopay_checkout_png,
-    fetch_gopay_qr_hd_png,   # <- betul (png)
+# --------------------------------------------------------
+#              APP & STATIC MINI-APP (frontend)
+# --------------------------------------------------------
+app = FastAPI(title="Telegram Saweria Bot API")
+
+# Aktifkan CORS bila frontend & API beda origin (aman untuk sementara)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],           # ganti ke domain kamu kalau sudah fix
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# ------------- ENV (Railway) -------------
-import os, json
-from typing import List, Optional
+# Mount folder Mini App (sesuaikan path jika berbeda)
+# Misal struktur: app/webapp/index.html
+try:
+    app.mount("/miniapp", StaticFiles(directory="app/webapp", html=True), name="miniapp")
+except Exception:
+    # Jika running dari cwd berbeda, coba path relatif lain (opsional)
+    pass
 
-# Harga seragam (dalam rupiah, tanpa titik). Default 25000 jika env kosong
+# --------------------------------------------------------
+#                   ENV (Railway Variables)
+# --------------------------------------------------------
+# Harga seragam (Rupiah, tanpa titik) – diambil dari Railway Variable PRICE_IDR
 PRICE_IDR = int(os.getenv("PRICE_IDR", "25000"))
 
-# Daftar grup dari Railway (boleh [{"id":"-100..","label":"..."}, ...] atau ["-100..", ...])
+# Daftar grup – diambil dari Railway Variable GROUP_IDS_JSON
+# Format boleh: [{"id":"-100...","label":"Group A"}, {"id":"-100...","label":"Group B"}]
+# atau: ["-100...","-100..."]
 try:
     raw_groups = json.loads(os.getenv("GROUP_IDS_JSON", "[]"))
     GROUPS: List[str] = [
         (g["id"] if isinstance(g, dict) and "id" in g else str(g))
         for g in raw_groups
     ]
-    GROUP_LABELS = {
+    GROUP_LABELS: Dict[str, str] = {
         (g.get("id") if isinstance(g, dict) else str(g)): (g.get("label") if isinstance(g, dict) else str(g))
         for g in raw_groups
     }
 except Exception:
     GROUPS, GROUP_LABELS = [], {}
 
-
-# ------------- APP & BOT -------------
-app = FastAPI()
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],      # ganti ke domain kamu kalau sudah fix
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-storage.init_db()
-
-bot_app: Application = build_app()
-register_handlers(bot_app)
-
-# Serve Mini App statics
-app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
-
-# ------------- TELEGRAM WEBHOOK -------------
-@app.post("/telegram/webhook")
-async def telegram_webhook(request: Request):
-    # optional secret validation
-    if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
-        raise HTTPException(403, "Invalid secret")
-
-    data = await request.json()
-    update = Update.de_json(data, bot_app.bot)
-    await bot_app.process_update(update)
-    return JSONResponse({"ok": True})
-
-# ---------------- MODELS ----------------
+# --------------------------------------------------------
+#                      MODELS
+# --------------------------------------------------------
 class CreateInvoiceIn(BaseModel):
     user_id: int
     groups: List[str]
 
-# ---------------- ROUTES ----------------
+# --------------------------------------------------------
+#                      ROUTES
+# --------------------------------------------------------
+@app.get("/health")
+def health():
+    return {"ok": True, "price_idr": PRICE_IDR, "groups_count": len(GROUPS)}
+
 @app.get("/api/config")
 def api_config():
-    """Kirim daftar grup & harga dari Railway ke Mini App"""
+    """Dipanggil Mini App untuk ambil daftar grup & harga dari Railway."""
     items = [{"id": gid, "label": GROUP_LABELS.get(gid, gid)} for gid in GROUPS]
     return {"price_idr": PRICE_IDR, "groups": items}
 
 @app.post("/api/invoice")
-from fastapi import HTTPException
-from pydantic import BaseModel
-from typing import List
-from . import payments  # pastikan sudah ada import ini di atas
-
-class CreateInvoiceIn(BaseModel):
-    user_id: int
-    groups: List[str]
-
-@app.post("/api/invoice")
 def create_invoice(data: CreateInvoiceIn):
-    # validasi dasar
+    # Validasi dasar
     if not data.user_id or data.user_id <= 0:
         raise HTTPException(status_code=422, detail="user_id tidak valid / tidak terbaca dari Telegram")
     if not data.groups:
         raise HTTPException(status_code=422, detail="groups kosong")
 
-    # validasi whitelist grup dari ENV (jika ada)
+    # Validasi whitelist grup dari ENV (jika ada)
     allowed = set(GROUPS or [])
-    groups = [g for g in data.groups if (not allowed or g in allowed)]
-    if not groups:
+    chosen = [g for g in data.groups if (not allowed or g in allowed)]
+    if not chosen:
         raise HTTPException(
             status_code=422,
             detail=f"Group tidak diizinkan. Allowed={list(allowed)}; Requested={data.groups}"
         )
 
-    # **SERVER** yang menghitung total (harga seragam dari Railway)
-    amount = int(PRICE_IDR) * len(groups)
+    # Server menghitung total (harga seragam dari Railway)
+    amount = int(PRICE_IDR) * len(chosen)
 
+    # Buat invoice via layer payments
     try:
-        # payments.create_invoice(user_id, groups, amount) -> dict dengan "invoice_id"
-        inv = payments.create_invoice(data.user_id, groups, amount)
+        inv = payments.create_invoice(user_id=int(data.user_id), groups=chosen, amount=int(amount))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal membuat invoice (server): {e}")
 
@@ -129,224 +108,65 @@ def create_invoice(data: CreateInvoiceIn):
     return {
         "invoice_id": inv["invoice_id"],
         "amount": inv.get("amount", amount),
-        "groups": groups,
+        "groups": chosen,
         "price_idr": PRICE_IDR,
         "status": inv.get("status", "PENDING"),
     }
 
-
-# ------------- API: STATUS & QR IMAGE -------------
-_DATA_URL_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$")
-
 @app.get("/api/invoice/{invoice_id}/status")
 def invoice_status(invoice_id: str):
-    st = payments.get_status(invoice_id)
-    if not st:
-        raise HTTPException(404, "Invoice not found")
-    # contoh balikan: {"status":"PENDING"|"PAID","paid_at":..., "has_qr": true|false}
-    return st
+    """
+    Normalisasi status invoice. Mengembalikan minimal:
+    { invoice_id, status, paid_at (opsional), has_qr (opsional) }
+    """
+    # Jika payments menyediakan helper status, gunakan; jika tidak, fallback manual.
+    inv: Optional[Dict[str, Any]] = None
+    status = "PENDING"
+    paid_at = None
+    has_qr = False
 
-# --- ganti seluruh fungsi ini ---
+    try:
+        # Try generic getter
+        inv = payments.get_invoice(invoice_id)
+    except Exception:
+        inv = None
+
+    if inv:
+        status = (inv.get("status") or "PENDING").upper()
+        paid_at = inv.get("paid_at")
+        payload = inv.get("qris_payload") or inv.get("qr_payload")
+        has_qr = bool(payload)
+
+    return {"invoice_id": invoice_id, "status": status, "paid_at": paid_at, "has_qr": has_qr}
+
+DATA_URL_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$")
+
 @app.get("/api/qr/{raw_id}")
-async def qr_png(
-    raw_id: str,
-    hd: bool = Query(False, description="Force scrape QR HD if not cached"),
-    wait: int = Query(0, description="Seconds to wait for background cache"),
-    amount: int | None = Query(None, description="(legacy) amount for on-demand"),
-    msg: str | None = Query(None, description="(legacy) message for on-demand"),
-):
-    # 1) Normalisasi ID: izinkan .../{invoice_id}.png atau .jpg
+def qr_png(raw_id: str):
+    """
+    Layani PNG QR dari payload yang tersimpan.
+    Mengizinkan suffix .png / .jpg pada {raw_id}.
+    """
     invoice_id = re.sub(r"\.(png|jpg|jpeg)$", "", raw_id, flags=re.I)
-
-    # 2) Ambil invoice dari DB
     inv = payments.get_invoice(invoice_id)
     if not inv:
-        # fallback super-legacy: kalau belum ada di DB tapi ada amount+msg, kita masih
-        # coba hasilkan QR on-demand supaya tidak blank (opsional)
-        if amount and msg:
-            try:
-                png = await fetch_gopay_qr_hd_png(int(amount), msg)
-                if png:
-                    return Response(content=png, media_type="image/png",
-                                    headers={"Cache-Control": "public, max-age=120"})
-            except Exception as e:
-                print("[qr_png] legacy-fallback error:", e)
-        raise HTTPException(404, "Invoice not found")
+        raise HTTPException(status_code=404, detail="invoice tidak ditemukan")
 
-    # siapkan nilai umum
-    amt = inv.get("amount") or amount or 0
-    message = f"INV:{invoice_id}"
+    data_url = inv.get("qris_payload") or inv.get("qr_payload")
+    if not data_url:
+        # Jika kamu ingin trigger generator QR HD di sini, kamu bisa panggil scraper dan simpan ke storage.
+        # Untuk versi aman, return 404 dulu agar client bisa retry.
+        raise HTTPException(status_code=404, detail="QR belum tersedia")
 
-    # 3) Jika sudah ada payload di DB → langsung kirim
-    payload = inv.get("qris_payload")
-    if payload:
-        m = _DATA_URL_RE.match(payload)
-        if not m:
-            raise HTTPException(400, "Bad image payload")
-        mime, b64 = m.groups()
-        return Response(
-            content=base64.b64decode(b64),
-            media_type=mime,
-            headers={"Cache-Control": "public, max-age=300"},
-        )
+    m = DATA_URL_RE.match(str(data_url))
+    if not m:
+        raise HTTPException(status_code=500, detail="Format QR payload tidak valid")
 
-    # 4) Tunggu sebentar background (opsional)
-    if wait and isinstance(wait, int) and wait > 0:
-        import asyncio
-        for _ in range(min(wait, 8)):
-            await asyncio.sleep(1)
-            inv2 = payments.get_invoice(invoice_id)
-            payload2 = inv2.get("qris_payload") if inv2 else None
-            if payload2:
-                m = _DATA_URL_RE.match(payload2)
-                if not m:
-                    break
-                mime, b64 = m.groups()
-                return Response(
-                    content=base64.b64decode(b64),
-                    media_type=mime,
-                    headers={"Cache-Control": "public, max-age=300"},
-                )
-
-    # 5) Generate on-demand (HD) + cache ke DB 
+    mime, b64 = m.group(1), m.group(2)
     try:
-        png = await fetch_gopay_qr_hd_png(amt, message)
-        if not png:
-            return Response(content=b"QR not found", status_code=502)
+        raw = base64.b64decode(b64)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Gagal decode QR payload")
 
-        try:
-            b64 = base64.b64encode(png).decode()
-            storage.update_qris_payload(invoice_id, f"data:image/png;base64,{b64}")
-        except Exception:
-            pass
-
-        return Response(
-            content=png,
-            media_type="image/png",
-            headers={"Cache-Control": "public, max-age=300"},
-        )
-    except Exception as e:
-        print("[qr_png] error:", e)
-        return Response(content=b"Error", status_code=500)
-# --- sampai sini ---
-
-
-# ------------- SAWERIA WEBHOOK (opsional) -------------
-# Jika kamu sudah menghubungkan webhook Saweria untuk tandai pembayaran "PAID"
-class SaweriaWebhookIn(BaseModel):
-    status: str
-    invoice_id: Optional[str] = None
-    external_id: Optional[str] = None
-    message: Optional[str] = None
-
-SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET", "")
-
-def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
-    if not SAWERIA_WEBHOOK_SECRET:
-        return True
-    sig_hdr = req.headers.get("X-Saweria-Signature")
-    if not sig_hdr:
-        return False
-    calc = hmac.new(SAWERIA_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(calc, sig_hdr)
-
-@app.post("/api/saweria/webhook")
-async def saweria_webhook(request: Request):
-    raw = await request.body()
-    if not _verify_saweria_signature(request, raw):
-        raise HTTPException(403, "Bad signature")
-    data = SaweriaWebhookIn.model_validate_json(raw)
-    if data.status.lower() != "paid":
-        return {"ok": True}
-
-    # tandai invoice paid (gunakan message atau external_id/invoice_id sesuai implementasi kamu)
-    inv = None
-    if data.invoice_id:
-        inv = payments.mark_paid(data.invoice_id)
-    if not inv:
-        raise HTTPException(404, "Invoice not found")
-
-    # kirim undangan ke semua grup terkait
-    groups = json.loads(inv["groups_json"])
-    for gid in groups:
-        try:
-            await send_invite_link(bot_app, inv["user_id"], gid)
-            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-bot)", None)
-        except Exception as e:
-            storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
-    return {"ok": True}
-
-# ------------- HEALTH / DEBUG -------------
-@app.get("/health")
-def health():
-    return {"ok": True}
-
-if ENV != "prod":
-    @app.get("/debug/invoices")
-    def debug_invoices(limit: int = 20):
-        return {"items": payments.list_invoices(limit)}
-
-    @app.get("/debug/invite-logs/{invoice_id}")
-    def debug_invite_logs(invoice_id: str):
-        return {"invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
-
-# ---- DEBUG: tes HTTP fetch langsung (tanpa Chromium) ----
-@app.get("/debug/fetch-saweria")
-async def debug_fetch_saweria():
-    username = os.getenv("SAWERIA_USERNAME", "").strip()
-    if not username:
-        raise HTTPException(400, "SAWERIA_USERNAME belum di-set")
-    url = f"https://saweria.co/{username}"
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(url, headers={
-            "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-        })
-    return {"url": url, "status": r.status_code, "len": len(r.text), "snippet": r.text[:300]}
-
-# ---- DEBUG: ambil PNG dari Chromium (Playwright) ----
-@app.get("/debug/saweria-snap")
-async def debug_saweria_snap():
-    png = await debug_snapshot()
-    if not png:
-        raise HTTPException(500, "Gagal snapshot (lihat logs)")
-    return Response(content=png, media_type="image/png")
-
-@app.get("/debug/saweria-fill")
-async def debug_saweria_fill(amount: int = 25000, msg: str = "INV:debug", method: str = "gopay"):
-    png = await debug_fill_snapshot(amount, msg, method)
-    if not png:
-        raise HTTPException(500, "Gagal snapshot setelah pengisian form (lihat logs)")
-    return Response(content=png, media_type="image/png")
-
-@app.get("/debug/saweria-pay")
-async def debug_saweria_pay(amount: int = 25000, msg: str = "INV:debug"):
-    png = await fetch_gopay_checkout_png(amount, msg)
-    if not png:
-        raise HTTPException(500, "Gagal menuju halaman pembayaran")
-    return Response(content=png, media_type="image/png")
-
-@app.get("/debug/saweria-qr-hd")
-async def debug_saweria_qr_hd(amount: int = 25000, msg: str = "INV:qr-hd"):
-    png = await fetch_gopay_qr_hd_png(amount, msg)
-    if not png:
-        raise HTTPException(500, "Gagal ambil QR HD")
-    return Response(content=png, media_type="image/png")
-
-# ------------- STARTUP / SHUTDOWN -------------
-@app.on_event("startup")
-async def on_start():
-    await bot_app.initialize()
-    if BASE_URL.startswith("https://"):
-        await bot_app.bot.set_webhook(
-            url=f"{BASE_URL}/telegram/webhook",
-            secret_token=WEBHOOK_SECRET or None,
-        )
-    else:
-        print("Skipping set_webhook: BASE_URL must start with https://")
-    await bot_app.start()
-
-@app.on_event("shutdown")
-async def on_stop():
-    await bot_app.stop()
-    await bot_app.shutdown()
+    # Standarkan output sebagai PNG
+    return Response(content=raw, media_type="image/png")
