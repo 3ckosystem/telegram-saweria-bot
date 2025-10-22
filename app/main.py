@@ -205,19 +205,34 @@ def _is_success_status(data: Any) -> bool:
     return False
 
 def _verify_signature(request: Request, raw_body: bytes) -> bool:
-    """Kalau kamu set secret di Saweria, biasa pakai header HMAC.
-    Di sini dibuat longgar: kalau WEBHOOK_SECRET kosong → auto True.
     """
+    Prioritas:
+    1) Jika WEBHOOK_SECRET kosong -> lolos (untuk debug/dev).
+    2) Jika ada header GitHub-style 'X-Hub-Signature-256' atau generic 'X-Signature':
+       validasi HMAC-SHA256(raw_body) pakai WEBHOOK_SECRET.
+    3) Jika ada 'saweria-callback-signature':
+       (sementara) terima dulu dan log-kan; nanti kita ketatkan pakai SAWERIA_STREAMKEY.
+    """
+    # 1) Dev mode: skip
     if not WEBHOOK_SECRET:
         return True
-    # Coba dua header populer
-    got = request.headers.get("X-Signature") or request.headers.get("X-Hub-Signature-256")
-    if not got:
-        return False
-    if got.startswith("sha256="):
-        got = got.split("=", 1)[1]
-    digest = hmac.new(WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(digest, got)
+
+    # 2) Generic HMAC (GitHub-style)
+    got = request.headers.get("X-Hub-Signature-256") or request.headers.get("X-Signature")
+    if got:
+        sig = got.split("=", 1)[-1] if "=" in got else got
+        digest = hmac.new(WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(digest, sig)
+
+    # 3) Saweria header — longgarkan dulu (accept + log)
+    saw_sig = request.headers.get("saweria-callback-signature")
+    if saw_sig:
+        print("[webhook] saweria-callback-signature detected (accepted in relaxed mode)")
+        return True
+
+    # Jika tak ada header apapun → tolak
+    return False
+
 
 @app.post("/webhook/saweria")
 async def webhook_saweria(request: Request):
