@@ -21,13 +21,17 @@ from .scraper import (
     fetch_gopay_qr_hd_png,   # <- betul (png)
 )
 
-# ---------------- ENV ----------------
-# ambil dari Railway Variables
+# ------------- ENV (Railway) -------------
+import os, json
+from typing import List, Optional
+
+# Harga seragam (dalam rupiah, tanpa titik). Default 25000 jika env kosong
 PRICE_IDR = int(os.getenv("PRICE_IDR", "25000"))
 
+# Daftar grup dari Railway (boleh [{"id":"-100..","label":"..."}, ...] atau ["-100..", ...])
 try:
     raw_groups = json.loads(os.getenv("GROUP_IDS_JSON", "[]"))
-    GROUPS = [
+    GROUPS: List[str] = [
         (g["id"] if isinstance(g, dict) and "id" in g else str(g))
         for g in raw_groups
     ]
@@ -38,8 +42,19 @@ try:
 except Exception:
     GROUPS, GROUP_LABELS = [], {}
 
+
 # ------------- APP & BOT -------------
 app = FastAPI()
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],      # ganti ke domain kamu kalau sudah fix
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 storage.init_db()
 
 bot_app: Application = build_app()
@@ -68,58 +83,57 @@ class CreateInvoiceIn(BaseModel):
 # ---------------- ROUTES ----------------
 @app.get("/api/config")
 def api_config():
-    """Dikirim ke Mini App agar daftar grup & harga seragam diambil dari Railway."""
+    """Kirim daftar grup & harga dari Railway ke Mini App"""
     items = [{"id": gid, "label": GROUP_LABELS.get(gid, gid)} for gid in GROUPS]
     return {"price_idr": PRICE_IDR, "groups": items}
 
+@app.post("/api/invoice")
+from fastapi import HTTPException
+from pydantic import BaseModel
+from typing import List
+from . import payments  # pastikan sudah ada import ini di atas
+
+class CreateInvoiceIn(BaseModel):
+    user_id: int
+    groups: List[str]
 
 @app.post("/api/invoice")
 def create_invoice(data: CreateInvoiceIn):
+    # validasi dasar
     if not data.user_id or data.user_id <= 0:
-        raise HTTPException(422, "user_id tidak valid")
+        raise HTTPException(status_code=422, detail="user_id tidak valid / tidak terbaca dari Telegram")
     if not data.groups:
-        raise HTTPException(422, "groups kosong")
+        raise HTTPException(status_code=422, detail="groups kosong")
 
+    # validasi whitelist grup dari ENV (jika ada)
     allowed = set(GROUPS or [])
-    valid_groups = [g for g in data.groups if (not allowed or g in allowed)]
-    if not valid_groups:
-        raise HTTPException(422, f"Semua group tidak diizinkan: {data.groups}")
+    groups = [g for g in data.groups if (not allowed or g in allowed)]
+    if not groups:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Group tidak diizinkan. Allowed={list(allowed)}; Requested={data.groups}"
+        )
 
-    amount = PRICE_IDR * len(valid_groups)
+    # **SERVER** yang menghitung total (harga seragam dari Railway)
+    amount = int(PRICE_IDR) * len(groups)
 
     try:
-        inv = payments.create_invoice(
-            user_id=int(data.user_id),
-            groups=valid_groups,
-            amount=amount
-        )
+        # payments.create_invoice(user_id, groups, amount) -> dict dengan "invoice_id"
+        inv = payments.create_invoice(data.user_id, groups, amount)
     except Exception as e:
-        raise HTTPException(500, f"Gagal membuat invoice: {e}")
+        raise HTTPException(status_code=500, detail=f"Gagal membuat invoice (server): {e}")
 
     if not inv or not inv.get("invoice_id"):
-        raise HTTPException(500, "create_invoice tidak mengembalikan invoice_id")
+        raise HTTPException(status_code=500, detail="create_invoice tidak mengembalikan invoice_id")
 
     return {
         "invoice_id": inv["invoice_id"],
         "amount": inv.get("amount", amount),
+        "groups": groups,
         "price_idr": PRICE_IDR,
-        "groups": valid_groups,
         "status": inv.get("status", "PENDING"),
     }
 
-# ------------- API: CREATE INVOICE -------------
-@app.post("/api/invoice")
-async def create_invoice(payload: CreateInvoiceIn):
-    # validasi group id terhadap ENV (opsional, aman jika kosong)
-    valid = set(GROUPS) if GROUPS else None
-    if valid:
-        for gid in payload.groups:
-            if gid not in valid:
-                raise HTTPException(400, f"Invalid group {gid}")
-
-    # trigger invoice + background capture (via payments)
-    inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
-    return inv
 
 # ------------- API: STATUS & QR IMAGE -------------
 _DATA_URL_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$")
