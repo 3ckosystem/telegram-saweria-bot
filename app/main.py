@@ -1,5 +1,5 @@
 # app/main.py
-import os, json, re, base64, hmac, hashlib, httpx
+import os, json, re, base64, hmac, hashlib, httpx, io
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException, Query
@@ -21,23 +21,22 @@ from .scraper import (
     fetch_gopay_qr_hd_png,   # <- betul (png)
 )
 
-# ------------- ENV -------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = (os.getenv("BASE_URL") or "").strip()
-if not BOT_TOKEN or not BASE_URL:
-    raise RuntimeError("Missing required env: BOT_TOKEN or BASE_URL")
+# ---------------- ENV ----------------
+# ambil dari Railway Variables
+PRICE_IDR = int(os.getenv("PRICE_IDR", "25000"))
 
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
-ENV = os.getenv("ENV", "dev")  # set "prod" di Railway untuk mematikan debug endpoints
-
-GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "[]")
 try:
-    GROUPS: List[str] = [
+    raw_groups = json.loads(os.getenv("GROUP_IDS_JSON", "[]"))
+    GROUPS = [
         (g["id"] if isinstance(g, dict) and "id" in g else str(g))
-        for g in json.loads(GROUPS_ENV)
+        for g in raw_groups
     ]
+    GROUP_LABELS = {
+        (g.get("id") if isinstance(g, dict) else str(g)): (g.get("label") if isinstance(g, dict) else str(g))
+        for g in raw_groups
+    }
 except Exception:
-    GROUPS = []
+    GROUPS, GROUP_LABELS = [], {}
 
 # ------------- APP & BOT -------------
 app = FastAPI()
@@ -61,11 +60,52 @@ async def telegram_webhook(request: Request):
     await bot_app.process_update(update)
     return JSONResponse({"ok": True})
 
-# ------------- MODELS -------------
+# ---------------- MODELS ----------------
 class CreateInvoiceIn(BaseModel):
     user_id: int
     groups: List[str]
-    amount: int
+
+# ---------------- ROUTES ----------------
+@app.get("/api/config")
+def api_config():
+    """Dikirim ke Mini App agar daftar grup & harga seragam diambil dari Railway."""
+    items = [{"id": gid, "label": GROUP_LABELS.get(gid, gid)} for gid in GROUPS]
+    return {"price_idr": PRICE_IDR, "groups": items}
+
+
+@app.post("/api/invoice")
+def create_invoice(data: CreateInvoiceIn):
+    if not data.user_id or data.user_id <= 0:
+        raise HTTPException(422, "user_id tidak valid")
+    if not data.groups:
+        raise HTTPException(422, "groups kosong")
+
+    allowed = set(GROUPS or [])
+    valid_groups = [g for g in data.groups if (not allowed or g in allowed)]
+    if not valid_groups:
+        raise HTTPException(422, f"Semua group tidak diizinkan: {data.groups}")
+
+    amount = PRICE_IDR * len(valid_groups)
+
+    try:
+        inv = payments.create_invoice(
+            user_id=int(data.user_id),
+            groups=valid_groups,
+            amount=amount
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Gagal membuat invoice: {e}")
+
+    if not inv or not inv.get("invoice_id"):
+        raise HTTPException(500, "create_invoice tidak mengembalikan invoice_id")
+
+    return {
+        "invoice_id": inv["invoice_id"],
+        "amount": inv.get("amount", amount),
+        "price_idr": PRICE_IDR,
+        "groups": valid_groups,
+        "status": inv.get("status", "PENDING"),
+    }
 
 # ------------- API: CREATE INVOICE -------------
 @app.post("/api/invoice")
