@@ -52,9 +52,8 @@ def _parse_groups_from_any(data):
             if isinstance(it, dict):
                 gid = str(it.get("id") or it.get("group_id") or it.get("value") or "").strip()
                 nm  = str(it.get("name") or it.get("label")    or it.get("text")  or "").strip()
-                init = str(it.get("initial") or "").strip()
                 if gid and nm:
-                    groups.append({"id": gid, "name": nm, "initial": init})
+                    groups.append({"id": gid, "name": nm})
             else:
                 gid = str(it).strip()
                 if gid:
@@ -126,7 +125,10 @@ async def create_invoice(payload: CreateInvoiceIn):
 
     # --- CALL payments.create_invoice dengan proteksi error
     try:
-        inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
+        id_to_initial = {str(g['id']): str(g.get('initial','')).strip() for g in GROUPS}
+        initials = [id_to_initial.get(str(gid), '') for gid in payload.groups]
+        message = ' '.join([s.strip() for s in initials if s.strip()])
+        inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount, message=message)
         # bentuk response minimal agar UI jalan
         return inv  # biasanya: {"invoice_id": "...", "status": "PENDING", "qr_url": "...", ...}
     except Exception as e:
@@ -188,20 +190,7 @@ async def qr_png(
 
     # siapkan nilai umum
     amt = inv.get("amount") or amount or 0
-    # Build message from GROUPS initial based on groups_json in invoice
-    try:
-        id_to_initial = {str(g["id"]): str(g.get("initial","")).strip() for g in GROUPS}
-    except Exception:
-        id_to_initial = {}
-    try:
-        import json as _json
-        inv_groups = inv.get("groups") or _json.loads(inv.get("groups_json") or "[]")
-    except Exception:
-        inv_groups = []
-    initials = [id_to_initial.get(str(g), "") for g in inv_groups]
-    # join with space (e.g., "M A S")
-    message = " ".join([s.strip() for s in initials if s.strip()]) or f"INV:{invoice_id}"
-
+    message = f"INV:{invoice_id}"
 
     # 3) Jika sudah ada payload di DB → langsung kirim
     payload = inv.get("qris_payload")

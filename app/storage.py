@@ -33,6 +33,7 @@ def init_db() -> None:
         user_id      INTEGER NOT NULL,
         amount       INTEGER NOT NULL,
         groups_json  TEXT NOT NULL,
+        message      TEXT,
         status       TEXT NOT NULL DEFAULT 'PENDING',
         qris_payload TEXT,
         paid_at      INTEGER,
@@ -40,7 +41,14 @@ def init_db() -> None:
     )
     """)
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS invite_logs (
+    
+    # try add message column if not exists (safe on repeated runs)
+    try:
+        cur.execute("ALTER TABLE invoices ADD COLUMN message TEXT")
+        conn.commit()
+    except Exception:
+        pass
+CREATE TABLE IF NOT EXISTS invite_logs (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         invoice_id  TEXT NOT NULL,
         group_id    TEXT,
@@ -57,16 +65,16 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
     return {k: row[k] for k in row.keys()}
 
 # ---------- invoices ----------
-def create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[str, Any]:
+def create_invoice(user_id: int, groups: List[str], amount: int, message: str = "") -> Dict[str, Any]:
     invoice_id = str(uuid.uuid4())
     groups_json = json.dumps(groups, ensure_ascii=False)
     now = int(time.time())
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO invoices (invoice_id, user_id, amount, groups_json, status, created_at)
+        INSERT INTO invoices (invoice_id, user_id, amount, groups_json, message, status, created_at)
         VALUES (?, ?, ?, ?, 'PENDING', ?)
-    """, (invoice_id, user_id, amount, groups_json, now))
+    """, (invoice_id, user_id, amount, groups_json, message, now))
     conn.commit()
     cur.execute("SELECT * FROM invoices WHERE invoice_id = ?", (invoice_id,))
     row = cur.fetchone()

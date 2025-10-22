@@ -19,15 +19,15 @@ from .scraper import fetch_gopay_qr_hd_png
 
 
 # ---------- util: panggil fungsi storage yang mungkin beda nama ----------
-def _storage_create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[str, Any]:
+def _storage_create_invoice(user_id: int, groups: List[str], amount: int, message: str = "") -> Dict[str, Any]:
     """
     Coba beberapa kemungkinan nama fungsi di storage agar fleksibel.
     Return: dict invoice (harus mengandung invoice_id / amount / groups_json / status, dsb.)
     """
     if hasattr(storage, "create_invoice"):
-        return storage.create_invoice(user_id, groups, amount)  # type: ignore[attr-defined]
+        return storage.create_invoice(user_id, groups, amount, message=message)  # type: ignore[attr-defined]
     if hasattr(storage, "add_invoice"):
-        return storage.add_invoice(user_id, groups, amount)  # type: ignore[attr-defined]
+        return storage.add_invoice(user_id, groups, amount, message=message)  # type: ignore[attr-defined]
     # fallback terakhir: bikin lewat API yang umum kalau ada
     raise RuntimeError("storage.create_invoice / add_invoice tidak ditemukan")
 
@@ -67,7 +67,7 @@ def _storage_list_invoices(limit: int = 20) -> List[Dict[str, Any]]:
 
 # ---------- API yang dipakai main.py ----------
 async def create_invoice(user_id: int, groups: List[str], amount: int, message: str = "") -> Dict[str, Any]:
-    inv = _storage_create_invoice(user_id, groups, amount)  # message handled at QR time  # <— simpan di DB/in-memory
+    inv = _storage_create_invoice(user_id, groups, amount, message=message)  # <— simpan di DB/in-memory
 
     # jika kamu ada proses ambil QR HD di background, teruskan juga message ke fetcher:
     # asyncio.create_task(_bg_fetch_qr_hd(inv["invoice_id"], message))
