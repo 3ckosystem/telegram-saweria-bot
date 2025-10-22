@@ -22,22 +22,53 @@ from .scraper import (
 )
 
 # ------------- ENV -------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = (os.getenv("BASE_URL") or "").strip()
-if not BOT_TOKEN or not BASE_URL:
-    raise RuntimeError("Missing required env: BOT_TOKEN or BASE_URL")
-
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+BASE_URL = os.environ["BASE_URL"].strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
-ENV = os.getenv("ENV", "dev")  # set "prod" di Railway untuk mematikan debug endpoints
+ENV = os.getenv("ENV", "dev")  # "prod" di Railway untuk mematikan debug endpoints
 
-GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "[]")
+# Robust reader utk GROUP_IDS_JSON & PRICE_IDR
+def _read_env_json(name: str, default_text: str = "[]"):
+    raw = os.environ.get(name, default_text)
+    if raw is None:
+        return []
+    s = raw.strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        # fallback jika ada single quotes
+        try:
+            return json.loads(s.replace("'", '"'))
+        except Exception:
+            return []
+
+def _parse_groups_from_any(data):
+    groups = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            groups.append({"id": str(k), "name": str(v)})
+    elif isinstance(data, list):
+        for it in data:
+            if isinstance(it, dict):
+                gid = str(it.get("id") or it.get("group_id") or it.get("value") or "").strip()
+                nm  = str(it.get("name") or it.get("label")    or it.get("text")  or "").strip()
+                if gid and nm:
+                    groups.append({"id": gid, "name": nm})
+            else:
+                gid = str(it).strip()
+                if gid:
+                    groups.append({"id": gid, "name": gid})
+    return groups
+
+# BACA ENV SEKARANG (module scope)
+GROUPS_DATA = _read_env_json("GROUP_IDS_JSON", "[]")
+GROUPS = _parse_groups_from_any(GROUPS_DATA)
+
 try:
-    GROUPS: List[str] = [
-        (g["id"] if isinstance(g, dict) and "id" in g else str(g))
-        for g in json.loads(GROUPS_ENV)
-    ]
+    PRICE_IDR = int(os.environ.get("PRICE_IDR", "25000"))
 except Exception:
-    GROUPS = []
+    PRICE_IDR = 25000
+
 
 # ------------- APP & BOT -------------
 app = FastAPI()
@@ -83,15 +114,11 @@ async def create_invoice(payload: CreateInvoiceIn):
     return inv
 
 
-# ------------- API: CONFIG (price + groups) -------------
+# ------------- API: CONFIG -------------
 @app.get("/api/config")
 def get_config():
     return {"price_idr": PRICE_IDR, "groups": GROUPS}
 
-# (compat) simple groups list
-@app.get("/api/groups")
-def get_groups():
-    return {"groups": GROUPS, "price_idr": PRICE_IDR}
 
 # ------------- API: STATUS & QR IMAGE -------------
 _DATA_URL_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$")
