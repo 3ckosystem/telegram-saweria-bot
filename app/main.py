@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 # ====== project modules (sudah ada di project kamu) ======
 from . import payments, storage
+from .bot import build_app, register_handlers, send_invite_link
 
 app = FastAPI(title="Telegram Saweria Bot API")
 
@@ -54,6 +55,35 @@ except Exception:
 class CreateInvoiceIn(BaseModel):
     user_id: int
     groups: List[str]
+
+
+tg_app = None
+
+@app.on_event("startup")
+async def _startup():
+    global tg_app
+    # init DB
+    try:
+        storage.init_db()
+    except Exception as e:
+        print("[startup] storage.init_db error:", e)
+    # init telegram app for sending messages
+    try:
+        tg_app = build_app()
+        register_handlers(tg_app)
+        await tg_app.initialize()
+        print("[startup] telegram app initialized")
+    except Exception as e:
+        print("[startup] telegram app init error:", e)
+
+@app.on_event("shutdown")
+async def _shutdown():
+    global tg_app
+    if tg_app:
+        try:
+            await tg_app.shutdown()
+        except Exception as e:
+            print("[shutdown] telegram app shutdown error:", e)
 
 # ================== ROUTES ==================
 @app.get("/health")
@@ -169,3 +199,16 @@ async def telegram_webhook_stub(req: Request):
     """
     _ = await req.body()
     return {"ok": True, "note": "stub webhook aktif - sambungkan ke handler bot bila diperlukan"}
+
+
+@app.post("/api/saweria/webhook")
+async def saweria_webhook(request: Request):
+    
+
+@app.get("/api/invite-logs/{invoice_id}")
+def invite_logs(invoice_id: str):
+    try:
+        logs = storage.list_invite_logs(invoice_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"invoice_id": invoice_id, "logs": logs}
