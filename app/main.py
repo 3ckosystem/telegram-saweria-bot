@@ -54,7 +54,8 @@ if os.path.isdir("public"):
     app.mount("/public", StaticFiles(directory="public"), name="public")
 
 # ---------- Telegram Bot lifecycle ----------
-bot_app: Application = build_app(BOT_TOKEN)
+bot_app: Application = build_app()
+
 register_handlers(bot_app)
 
 @app.on_event("startup")
