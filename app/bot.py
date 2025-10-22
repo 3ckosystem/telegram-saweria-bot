@@ -37,8 +37,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # Penting: gunakan Application (app) agar bisa dipanggil dari FastAPI webhook tanpa Context
+# potongan penting
 async def send_invite_link(app: Application, chat_id: int, target_group_id: str):
-    # Buat link sekali pakai (1 member, expired cepat)
+    import time
     expire = int(time.time()) + 15*60
     link = await app.bot.create_chat_invite_link(
         chat_id=target_group_id,
@@ -47,12 +48,10 @@ async def send_invite_link(app: Application, chat_id: int, target_group_id: str)
         creates_join_request=False,
         name="Paid join"
     )
-    # sebelum send message:
-    # print(f"[invite] to user={chat_id} group={target_group_id}")
-    print(f"[invite] sending to user={chat_id} group={target_group_id}")
-
-
-    await app.bot.send_message(chat_id, f"✅ Pembayaran diterima.\nBerikut link undangan kamu:\n{link.invite_link}")
+    await app.bot.send_message(
+        chat_id,
+        f"✅ Pembayaran diterima.\nBerikut link undangan kamu:\n{link.invite_link}"
+    )
 
 def register_handlers(app: Application):
     app.add_handler(CommandHandler("start", start))
