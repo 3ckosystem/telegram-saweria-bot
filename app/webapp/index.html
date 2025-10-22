@@ -3,24 +3,68 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>EnSEXlopedia Mini Apps</title>
+  <title>Group Access – Mini App</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
-    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
-    #qr img { max-width: 240px; border:1px solid #eee; padding:6px; border-radius:8px }
-    button { padding:8px 12px; border-radius:8px; border:1px solid #ddd; background:#f5f5f5 }
+    :root { --brand:#002060; --muted:#f6f7fb; --border:#e5e7ef; }
+    * { box-sizing:border-box }
+    body { margin:0; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:#fff; }
+    header { position:sticky; top:0; background:#fff; padding:12px 16px; border-bottom:1px solid var(--border); z-index:5 }
+    h1 { margin:0; font-size:18px; }
+    #list { padding:12px 12px 90px; }
+    .card { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px solid var(--border); border-radius:12px; padding:12px; margin:10px 0; background:#fff; }
+    .title { font-weight:600; font-size:15px; }
+    .price { font-weight:700; }
+    .muted { color:#667085; font-size:12px }
+    .actions { display:flex; gap:8px }
+    button { padding:8px 12px; border-radius:10px; border:1px solid var(--border); background:#f5f7ff; cursor:pointer }
+    button.primary { background:var(--brand); color:#fff; border-color:var(--brand) }
+    button.ghost { background:#fff }
+    button.danger { background:#fff0f0; border-color:#ffd6d6 }
+    #bar { position:fixed; left:0; right:0; bottom:0; border-top:1px solid var(--border); background:#fff; padding:10px 12px; display:flex; align-items:center; gap:10px; z-index:10 }
+    #bar .tot { flex:1 }
+    #confirm, #payview { display:none; padding:16px; }
+    #qr img { max-width:260px; border:1px solid #eee; padding:6px; border-radius:10px }
+    .list-compact li { margin:6px 0 }
+    .pill { background:#eef2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
   </style>
 </head>
 <body>
-  <h3>Pilih Grup</h3>
-  <div id="groups"></div>
+  <header><h1>Pilih Grup</h1></header>
 
-  <label>Nominal (IDR): <input id="amount" type="number" value="25000"/></label>
-  <div style="margin-top:8px">
-    <button id="pay">Lanjut Pembayaran (QRIS)</button>
+  <section id="list"></section>
+
+  <section id="confirm">
+    <h3>Konfirmasi Pesanan</h3>
+    <div id="confirm-items" class="muted"></div>
+    <p class="price" id="confirm-total"></p>
+    <div style="margin-top:12px">
+      <button id="btn-back" class="ghost">Kembali</button>
+      <button id="btn-pay" class="primary">Lanjutkan Pembayaran</button>
+    </div>
+  </section>
+
+  <section id="payview">
+    <h3>Invoice</h3>
+    <div class="muted">ID: <span id="inv-id">-</span></div>
+    <div class="muted">Total: <span id="inv-amt">-</span></div>
+
+    <div id="qr" style="margin-top:12px;text-align:center"></div>
+
+    <div style="margin-top:12px">
+      <b>Menunggu pembayaran…</b>
+      <div class="muted">Setelah terbayar, Mini App akan menutup otomatis.</div>
+      <button id="btn-done" style="margin-top:8px">Saya sudah bayar</button>
+    </div>
+  </section>
+
+  <div id="bar">
+    <div class="tot">
+      <div><span class="pill"><span id="count">0</span> item</span></div>
+      <div class="price">Rp <span id="total">0</span></div>
+    </div>
+    <button id="checkout" class="primary" disabled>Checkout</button>
   </div>
-
-  <div id="qr" style="margin-top:16px;"></div>
 
   <script src="./app.js"></script>
 </body>
