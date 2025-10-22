@@ -1,5 +1,6 @@
 # app/main.py
 import os, json, re, base64, hmac, hashlib, httpx
+import payments
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException, Query
