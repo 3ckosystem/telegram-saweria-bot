@@ -1,48 +1,42 @@
 # app/main.py
-import os, json, re, base64, io
+import os, json, re, base64
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# ----------------- import layer project -----------------
-# Pastikan modul ini sudah ada di project kamu (sesuai repo sebelumnya)
+# ====== project modules (sudah ada di project kamu) ======
 from . import payments, storage
 
-# --------------------------------------------------------
-#              APP & STATIC MINI-APP (frontend)
-# --------------------------------------------------------
 app = FastAPI(title="Telegram Saweria Bot API")
 
-# Aktifkan CORS bila frontend & API beda origin (aman untuk sementara)
+# --- CORS (nyalain kalau front-end & API beda origin) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],           # ganti ke domain kamu kalau sudah fix
+    allow_origins=["*"],      # ganti ke domain kamu kalau sudah fix
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount folder Mini App (sesuaikan path jika berbeda)
-# Misal struktur: app/webapp/index.html
+# --- Serve Mini App statis (ubah path bila perlu) ---
 try:
     app.mount("/miniapp", StaticFiles(directory="app/webapp", html=True), name="miniapp")
 except Exception:
-    # Jika running dari cwd berbeda, coba path relatif lain (opsional)
+    # abaikan kalau direktori tidak ada di kontainer tertentu
     pass
 
-# --------------------------------------------------------
-#                   ENV (Railway Variables)
-# --------------------------------------------------------
-# Harga seragam (Rupiah, tanpa titik) – diambil dari Railway Variable PRICE_IDR
+# --- Root ke Mini App (opsional, biar gampang test) ---
+@app.get("/")
+def root_index():
+    return PlainTextResponse("OK. Buka /miniapp/ untuk Mini App, atau panggil /api/config /api/invoice dsb.")
+
+# ================== ENV (Railway Variables) ==================
 PRICE_IDR = int(os.getenv("PRICE_IDR", "25000"))
 
-# Daftar grup – diambil dari Railway Variable GROUP_IDS_JSON
-# Format boleh: [{"id":"-100...","label":"Group A"}, {"id":"-100...","label":"Group B"}]
-# atau: ["-100...","-100..."]
 try:
     raw_groups = json.loads(os.getenv("GROUP_IDS_JSON", "[]"))
     GROUPS: List[str] = [
@@ -56,16 +50,12 @@ try:
 except Exception:
     GROUPS, GROUP_LABELS = [], {}
 
-# --------------------------------------------------------
-#                      MODELS
-# --------------------------------------------------------
+# ================== MODELS ==================
 class CreateInvoiceIn(BaseModel):
     user_id: int
     groups: List[str]
 
-# --------------------------------------------------------
-#                      ROUTES
-# --------------------------------------------------------
+# ================== ROUTES ==================
 @app.get("/health")
 def health():
     return {"ok": True, "price_idr": PRICE_IDR, "groups_count": len(GROUPS)}
@@ -84,7 +74,7 @@ def create_invoice(data: CreateInvoiceIn):
     if not data.groups:
         raise HTTPException(status_code=422, detail="groups kosong")
 
-    # Validasi whitelist grup dari ENV (jika ada)
+    # Validasi whitelist ENV
     allowed = set(GROUPS or [])
     chosen = [g for g in data.groups if (not allowed or g in allowed)]
     if not chosen:
@@ -93,10 +83,10 @@ def create_invoice(data: CreateInvoiceIn):
             detail=f"Group tidak diizinkan. Allowed={list(allowed)}; Requested={data.groups}"
         )
 
-    # Server menghitung total (harga seragam dari Railway)
+    # Server hitung total (harga seragam dari Railway)
     amount = int(PRICE_IDR) * len(chosen)
 
-    # Buat invoice via layer payments
+    # Buat invoice
     try:
         inv = payments.create_invoice(user_id=int(data.user_id), groups=chosen, amount=int(amount))
     except Exception as e:
@@ -115,18 +105,12 @@ def create_invoice(data: CreateInvoiceIn):
 
 @app.get("/api/invoice/{invoice_id}/status")
 def invoice_status(invoice_id: str):
-    """
-    Normalisasi status invoice. Mengembalikan minimal:
-    { invoice_id, status, paid_at (opsional), has_qr (opsional) }
-    """
-    # Jika payments menyediakan helper status, gunakan; jika tidak, fallback manual.
     inv: Optional[Dict[str, Any]] = None
     status = "PENDING"
     paid_at = None
     has_qr = False
 
     try:
-        # Try generic getter
         inv = payments.get_invoice(invoice_id)
     except Exception:
         inv = None
@@ -139,13 +123,13 @@ def invoice_status(invoice_id: str):
 
     return {"invoice_id": invoice_id, "status": status, "paid_at": paid_at, "has_qr": has_qr}
 
+# ----- QR payload → PNG -----
 DATA_URL_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$")
 
 @app.get("/api/qr/{raw_id}")
 def qr_png(raw_id: str):
     """
-    Layani PNG QR dari payload yang tersimpan.
-    Mengizinkan suffix .png / .jpg pada {raw_id}.
+    Layani PNG QR dari payload yang tersimpan. Izinkan suffix .png/.jpg pada {raw_id}.
     """
     invoice_id = re.sub(r"\.(png|jpg|jpeg)$", "", raw_id, flags=re.I)
     inv = payments.get_invoice(invoice_id)
@@ -154,8 +138,7 @@ def qr_png(raw_id: str):
 
     data_url = inv.get("qris_payload") or inv.get("qr_payload")
     if not data_url:
-        # Jika kamu ingin trigger generator QR HD di sini, kamu bisa panggil scraper dan simpan ke storage.
-        # Untuk versi aman, return 404 dulu agar client bisa retry.
+        # Bisa dibuat auto-generate di sini kalau kamu ingin.
         raise HTTPException(status_code=404, detail="QR belum tersedia")
 
     m = DATA_URL_RE.match(str(data_url))
@@ -168,5 +151,21 @@ def qr_png(raw_id: str):
     except Exception:
         raise HTTPException(status_code=500, detail="Gagal decode QR payload")
 
-    # Standarkan output sebagai PNG
     return Response(content=raw, media_type="image/png")
+
+# ================== BACK-COMPAT / STUBS ==================
+@app.get("/debug/saweria-qr-hd")
+def debug_saweria_qr_hd(amount: Optional[int] = None, msg: Optional[str] = None):
+    """
+    Endpoint lama: sekarang tidak dipakai. Balikkan 410 agar jelas.
+    """
+    raise HTTPException(status_code=410, detail="Endpoint debug/saweria-qr-hd sudah tidak digunakan. Pakai alur: /api/invoice -> /api/qr/{invoice_id}.png")
+
+@app.post("/telegram/webhook")
+async def telegram_webhook_stub(req: Request):
+    """
+    Stub agar tidak 404 ketika webhook lama masih aktif.
+    Kalau ingin hidupkan handler bot sesungguhnya, sambungkan di sini.
+    """
+    _ = await req.body()
+    return {"ok": True, "note": "stub webhook aktif - sambungkan ke handler bot bila diperlukan"}
