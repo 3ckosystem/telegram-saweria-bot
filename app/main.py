@@ -92,32 +92,61 @@ async def telegram_webhook(request: Request):
     await bot_app.process_update(update)
     return JSONResponse({"ok": True})
 
-# ------------- MODELS -------------
+
+
+# ------------- API: CREATE INVOICE -------------
+# ------------- API: CREATE INVOICE -------------
 class CreateInvoiceIn(BaseModel):
     user_id: int
     groups: List[str]
     amount: int
 
-# ------------- API: CREATE INVOICE -------------
 @app.post("/api/invoice")
 async def create_invoice(payload: CreateInvoiceIn):
-    # validasi group id terhadap ENV (opsional, aman jika kosong)
-    valid = set(GROUPS) if GROUPS else None
-    if valid:
-        allowed = {g["id"] for g in GROUPS}
-    for gid in payload.groups:
-        if gid not in allowed:
-            raise HTTPException(400, f"Invalid group {gid}")
+    # --- DEBUG LOG (bisa hapus setelah stabil)
+    import logging, json as _json
+    logging.info(f"[create_invoice] uid={payload.user_id} groups={payload.groups} amount={payload.amount}")
 
-    # trigger invoice + background capture (via payments)
-    inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
-    return inv
+    # --- VALIDASI amount (minimal>0; boleh set MIN_PRICE_IDR di env)
+    try:
+        MIN_PRICE_IDR = int(os.environ.get("MIN_PRICE_IDR", "1"))
+    except Exception:
+        MIN_PRICE_IDR = 1
+    if not isinstance(payload.amount, int) or payload.amount < MIN_PRICE_IDR:
+        raise HTTPException(400, f"Invalid amount. Min {MIN_PRICE_IDR}")
+
+    # --- VALIDASI groups dari ENV (id harus match)
+    try:
+        allowed = {str(g["id"]) for g in GROUPS}
+    except Exception:
+        allowed = set()
+    for gid in payload.groups:
+        if str(gid) not in allowed:
+            # kasih tahu id yang valid untuk debug cepat
+            raise HTTPException(400, f"Invalid group {gid}. Allowed={list(allowed)[:5]}...")
+
+    # --- CALL payments.create_invoice dengan proteksi error
+    try:
+        inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
+        # bentuk response minimal agar UI jalan
+        return inv  # biasanya: {"invoice_id": "...", "status": "PENDING", "qr_url": "...", ...}
+    except Exception as e:
+        # log stacktrace biar kelihatan jelas di Railway logs
+        import traceback, logging
+        logging.error("create_invoice failed: %s", e)
+        logging.error(traceback.format_exc())
+        # balas 400 ke UI agar tampil pesan manusiawi, bukan 500
+        raise HTTPException(400, f"Create invoice error: {e}")
 
 
 # ------------- API: CONFIG -------------
 @app.get("/api/config")
 def get_config():
-    return {"price_idr": PRICE_IDR, "groups": GROUPS}
+    try:
+        return {"price_idr": PRICE_IDR, "groups": GROUPS}
+    except Exception:
+        return {"price_idr": 25000, "groups": []}
+
 
 
 # ------------- API: STATUS & QR IMAGE -------------
