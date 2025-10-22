@@ -1,20 +1,16 @@
 # app/bot.py
-
 from dotenv import load_dotenv
-load_dotenv()  # baca .env saat jalan lokal
+load_dotenv()
 
 import os, json, time
 from telegram import Update, WebAppInfo, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# Baca env aman
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise RuntimeError(
-        "BOT_TOKEN belum di-set. Isi di .env (lokal) atau Railway Variables (production)."
-    )
+    raise RuntimeError("BOT_TOKEN belum di-set.")
 
-BASE_URL = os.getenv("BASE_URL") or "http://127.0.0.1:8000"  # aman untuk lokal
+BASE_URL = os.getenv("BASE_URL") or "http://127.0.0.1:8000"
 GROUPS = json.loads(os.getenv("GROUP_IDS_JSON") or "[]")
 
 def build_app() -> Application:
@@ -22,7 +18,8 @@ def build_app() -> Application:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    webapp_url = f"{BASE_URL}/webapp/index.html?uid={uid}"
+    # cukup arahkan ke /webapp/ (StaticFiles html=True akan serve index.html)
+    webapp_url = f"{BASE_URL}/webapp/?uid={uid}"
 
     kb = [[KeyboardButton(
         text="🛍️ Buka Katalog",

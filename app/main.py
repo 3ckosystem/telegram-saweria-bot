@@ -3,7 +3,7 @@ import os, json, re, hmac, hashlib
 from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -49,9 +49,21 @@ GROUPS = parse_groups(GROUPS_ENV)
 # ===================== FastAPI =====================
 app = FastAPI(title="Telegram × Saweria Bot")
 
-# Static (kalau ada folder public/)
+# Static: /public (opsional)
 if os.path.isdir("public"):
     app.mount("/public", StaticFiles(directory="public"), name="public")
+
+# Static: /webapp (WAJIB untuk Mini App)
+# letakkan file HTML/JS kamu di folder app root "webapp/"
+if os.path.isdir("webapp"):
+    app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webapp")
+
+# root: redirect ke /webapp/ bila ada
+@app.get("/")
+def root():
+    if os.path.isdir("webapp"):
+        return RedirectResponse(url="/webapp/")
+    return {"ok": True, "message": "Service is running."}
 
 # ---------- Telegram Bot lifecycle ----------
 bot_app: Application = build_app()
@@ -121,7 +133,7 @@ def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
         if hasattr(storage, "save_invoice"):
             storage.save_invoice(inv)  # type: ignore
 
-    # tambahkan kode pendek konsisten untuk semua backend
+    # kode pendek
     inv_id = str(inv.get("invoice_id", ""))
     short = inv_id.replace("INV:", "").replace("inv:", "").replace("-", "")[:8].upper()
     code = f"INV:{short}" if short else f"INV:{os.urandom(4).hex().upper()}"
@@ -143,6 +155,7 @@ def _storage_update_status(invoice_id: str, status: str) -> Optional[Dict[str, A
     return inv
 
 # === Regex utk ekstraksi key/kode invoice dari payload webhook ===
+import re
 INV_KEY_RE = re.compile(r"(INV[:：]?\s*([A-Za-z0-9]{4,16}))", re.I)
 UUID_RE    = re.compile(r"\b[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\b", re.I)
 
