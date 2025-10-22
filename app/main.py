@@ -55,7 +55,6 @@ if os.path.isdir("public"):
 
 # ---------- Telegram Bot lifecycle ----------
 bot_app: Application = build_app()
-
 register_handlers(bot_app)
 
 @app.on_event("startup")
@@ -82,7 +81,7 @@ async def on_stop():
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
     if WEBHOOK_SECRET:
-        # telegram kirim header 'X-Telegram-Bot-Api-Secret-Token'
+        # Telegram kirim header 'X-Telegram-Bot-Api-Secret-Token'
         token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
         if token != WEBHOOK_SECRET:
             raise HTTPException(status_code=401, detail="bad secret")
@@ -129,8 +128,6 @@ def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
         storage.save_invoice(inv)  # type: ignore
     return inv
 
-
-
 def _storage_update_status(invoice_id: str, status: str) -> Optional[Dict[str, Any]]:
     if hasattr(storage, "update_invoice_status"):
         return storage.update_invoice_status(invoice_id, status)  # type: ignore
@@ -143,11 +140,16 @@ def _storage_update_status(invoice_id: str, status: str) -> Optional[Dict[str, A
             storage.save_invoice(inv)  # type: ignore
     return inv
 
-# === PATCH: extractor key dari payload webhook ===
-INV_RE = re.compile(r"(INV[:：]?\s*([A-Za-z0-9]{4,16}))", re.I)
-UUID_RE = re.compile(r"\b[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\b", re.I)
+# === Regex utk ekstraksi key/kode invoice dari payload webhook ===
+INV_KEY_RE = re.compile(r"(INV[:：]?\s*([A-Za-z0-9]{4,16}))", re.I)
+UUID_RE    = re.compile(r"\b[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\b", re.I)
 
 def _extract_invoice_key(data: Any) -> Optional[str]:
+    """
+    Ambil "key" pendek yg bisa berupa:
+    - INV:XXXX (mengembalikan XXXX)
+    - UUID panjang (mengembalikan 8 char pertama)
+    """
     candidates: List[str] = []
     if isinstance(data, dict):
         for k in ["message","pesan","note","notes","comment","payload","metadata","data","custom_field","custom","order_id","invoice_id","id"]:
@@ -165,14 +167,13 @@ def _extract_invoice_key(data: Any) -> Optional[str]:
     for text in candidates:
         if not text:
             continue
-        m = INV_RE.search(text)
+        m = INV_KEY_RE.search(text)
         if m:
             return m.group(2).upper()
         m2 = UUID_RE.search(text)
         if m2:
             return m2.group(0).replace("-", "").upper()[:8]
     return None
-
 
 @app.post("/api/invoice")
 async def api_create_invoice(payload: CreateInvoiceIn):
@@ -188,7 +189,7 @@ async def api_create_invoice(payload: CreateInvoiceIn):
         ],
     }
 
-# === PATCH: helper cari invoice by code/prefix dan fallback ===
+# === helper cari invoice by code/prefix dan fallback ===
 def _storage_find_by_code_prefix(prefix: str):
     prefix = prefix.strip().upper().replace("INV:", "")
     if hasattr(storage, "list_invoices"):
@@ -220,26 +221,24 @@ async def api_status(invoice_id: str):
 # ==================================================
 # ===============  SAWERIA WEBHOOK  ================
 # ==================================================
-# Saweria → POST ke /webhook/saweria (yang 404 di log kamu)
+# Saweria → POST ke /webhook/saweria
 
-INV_RE = re.compile(r"(INV[:：]\s*[A-Za-z0-9\-]+)", re.I)
+# Pola “INV:xxxx” versi penuh (berbeda dgn INV_KEY_RE)
+INV_FULL_RE = re.compile(r"(INV[:：]\s*[A-Za-z0-9\-]+)", re.I)
 
 def _extract_invoice_id_from_payload(data: Any) -> Optional[str]:
     """Coba cari INV:xxxx dari berbagai field (pesan/note/metadata)."""
     if data is None:
         return None
 
-    # flatten kandidat field berbentuk string
     candidates: List[str] = []
     if isinstance(data, dict):
-        # payload standar sering di bawah 'data'/'payload'/'message'/'note'
         for k in ["message", "pesan", "note", "notes", "comment", "payload", "metadata", "data", "custom_field", "custom"]:
             v = data.get(k)
             if isinstance(v, str):
                 candidates.append(v)
             elif isinstance(v, (dict, list)):
                 candidates.append(json.dumps(v))
-        # juga cek root-as-string
         candidates.append(json.dumps(data))
     elif isinstance(data, list):
         candidates.append(json.dumps(data))
@@ -247,15 +246,13 @@ def _extract_invoice_id_from_payload(data: Any) -> Optional[str]:
         candidates.append(data)
 
     for text in candidates:
-        m = INV_RE.search(text or "")
+        m = INV_FULL_RE.search(text or "")
         if m:
-            # normalisasi spasi setelah titik dua
             return m.group(1).replace("：", ":").replace(" ", "")
     return None
 
 def _is_success_status(data: Any) -> bool:
     # fleksibel: cari status sukses
-    # beberapa integrasi pakai 'status':'PAID' / 'success':true / 'paid_at':<ts>
     if isinstance(data, dict):
         s = str(data.get("status", "")).upper()
         if s in {"PAID", "SUCCESS", "COMPLETED"}:
@@ -266,7 +263,7 @@ def _is_success_status(data: Any) -> bool:
             return True
     return False
 
-# === PATCH: verifikasi signature (relaxed) ===
+# === verifikasi signature (relaxed) ===
 def _verify_signature(request: Request, raw_body: bytes) -> bool:
     if not WEBHOOK_SECRET:
         return True
@@ -281,8 +278,7 @@ def _verify_signature(request: Request, raw_body: bytes) -> bool:
         return True
     return False
 
-
-@a@app.post("/webhook/saweria")
+@app.post("/webhook/saweria")
 async def webhook_saweria(request: Request):
     raw = await request.body()
     try:
