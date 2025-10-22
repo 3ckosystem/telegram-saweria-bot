@@ -106,20 +106,29 @@ def _storage_get(invoice_id: str) -> Optional[Dict[str, Any]]:
         return storage.find_invoice(invoice_id)  # type: ignore
     return None
 
-def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
+def def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
     if hasattr(storage, "create_invoice"):
-        return storage.create_invoice(user_id, group_id, amount)  # type: ignore
-    # fallback minimal
-    inv = {
-        "invoice_id": f"INV:{os.urandom(8).hex()}",
-        "user_id": user_id,
-        "group_id": group_id,
-        "amount": amount,
-        "status": "PENDING",
-    }
+        inv = storage.create_invoice(user_id, group_id, amount)  # type: ignore
+    else:
+        inv = {
+            "invoice_id": f"{os.urandom(16).hex()}",
+            "user_id": user_id,
+            "group_id": group_id,
+            "amount": amount,
+            "status": "PENDING",
+        }
+        if hasattr(storage, "save_invoice"):
+            storage.save_invoice(inv)  # type: ignore
+
+    # tambahkan kode pendek (tetap konsisten untuk semua backend storage)
+    inv_id = str(inv.get("invoice_id", ""))
+    short = inv_id.replace("INV:", "").replace("inv:", "").replace("-", "")[:8].upper()
+    code = f"INV:{short}" if short else f"INV:{os.urandom(4).hex().upper()}"
+    inv["code"] = code
     if hasattr(storage, "save_invoice"):
         storage.save_invoice(inv)  # type: ignore
     return inv
+
 
 def _storage_update_status(invoice_id: str, status: str) -> Optional[Dict[str, Any]]:
     if hasattr(storage, "update_invoice_status"):
@@ -133,20 +142,50 @@ def _storage_update_status(invoice_id: str, status: str) -> Optional[Dict[str, A
             storage.save_invoice(inv)  # type: ignore
     return inv
 
+INV_RE = re.compile(r"(INV[:：]?\s*([A-Za-z0-9]{4,16}))", re.I)
+UUID_RE = re.compile(r"\b[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\b", re.I)
+
+def _extract_invoice_key(data: Any) -> Optional[str]:
+    candidates: List[str] = []
+    if isinstance(data, dict):
+        for k in ["message","pesan","note","notes","comment","payload","metadata","data","custom_field","custom","order_id","invoice_id","id"]:
+            v = data.get(k)
+            if isinstance(v, str):
+                candidates.append(v)
+            elif isinstance(v, (dict, list)):
+                candidates.append(json.dumps(v))
+        candidates.append(json.dumps(data))
+    elif isinstance(data, list):
+        candidates.append(json.dumps(data))
+    elif isinstance(data, str):
+        candidates.append(data)
+
+    for text in candidates:
+        if not text: 
+            continue
+        m = INV_RE.search(text)
+        if m:
+            return m.group(2).upper()  # bagian setelah INV:
+        m2 = UUID_RE.search(text)
+        if m2:
+            return m2.group(0).replace("-", "").upper()[:8]  # pakai prefix 8 char
+    return None
+
+
 @app.post("/api/invoice")
 async def api_create_invoice(payload: CreateInvoiceIn):
     inv = _storage_create(payload.user_id, payload.group_id, payload.amount)
-    # tampilkan instruksi ke Mini App
     return {
         "ok": True,
-        "invoice_id": inv["invoice_id"],
-        "code": inv["invoice_id"],  # disalin ke 'pesan' sebelum bayar
+        "invoice_id": inv["invoice_id"],  # UUID/ID internal
+        "code": inv.get("code"),          # ← ini yang harus ditempel user di pesan/note
         "amount": inv["amount"],
         "howto": [
-            "Scan QR lalu tempel kode di kolom 'pesan' sebelum bayar (opsional bila scan QR).",
-            "Setelah bayar, Mini App akan menutup otomatis dan bot mengirim link undangan."
+            "Jika ada kolom 'pesan' sebelum bayar, tempelkan kode ini.",
+            "Setelah bayar, bot akan kirim link undangan ke DM kamu."
         ],
     }
+
 
 @app.get("/api/status/{invoice_id}")
 async def api_status(invoice_id: str):
@@ -234,7 +273,7 @@ def _verify_signature(request: Request, raw_body: bytes) -> bool:
     return False
 
 
-@app.post("/webhook/saweria")
+@a@app.post("/webhook/saweria")
 async def webhook_saweria(request: Request):
     raw = await request.body()
     try:
@@ -243,37 +282,44 @@ async def webhook_saweria(request: Request):
         data = None
 
     if not _verify_signature(request, raw):
-        print("[webhook] invalid signature")
         raise HTTPException(401, "invalid signature")
 
-    inv_id = _extract_invoice_id_from_payload(data)
-    print(f"[webhook] payload received. extracted invoice = {inv_id}")
-    if not inv_id:
-        # tetap 200 agar Saweria tidak retry agresif, tapi log-kan
-        return JSONResponse({"ok": True, "message": "no invoice code found"}, status_code=200)
+    key = _extract_invoice_key(data)
+    print(f"[webhook] payload received. extracted key = {key}")
 
-    inv = _storage_get(inv_id)
+    inv = None
+    if key:
+        # 1) coba ketemu by code/prefix
+        inv = _storage_find_by_code_prefix(key)
+        if not inv:
+            # 2) coba exact get kalau kebetulan key = invoice_id penuh
+            inv = _storage_get(key)  # aman: kalau gak ada, cuma None
+
+    # 3) fallback dev: kalau hanya ada satu PENDING, pakai itu
     if not inv:
-        print(f"[webhook] invoice not found: {inv_id}")
+        inv = _storage_get_pending_only()
+        if inv:
+            print("[webhook] fallback to single PENDING invoice")
+
+    if not inv:
         return JSONResponse({"ok": True, "message": "invoice not found"}, status_code=200)
 
     # sukses?
-    success = _is_success_status(data) or True  # <- bila Saweria tidak kirim status jelas, pakai True (karena webhook dipicu setelah bayar)
+    success = _is_success_status(data) or True
     if not success:
-        print(f"[webhook] not marked success, ignoring. invoice={inv_id}")
         return {"ok": True}
 
-    # mark paid
+    inv_id = str(inv.get("invoice_id"))
     inv = _storage_update_status(inv_id, "PAID")
     print(f"[webhook] marked PAID for {inv_id}")
 
-    # kirim invite
     try:
         chat_id = int(inv["user_id"])
         target_group_id = str(inv["group_id"])
-        await send_invite_link(bot_app, chat_id=chat_id, target_group_id=target_group_id)
+        await send_invite_link(bot_app, chat_id, target_group_id)
         print(f"[webhook] invite sent → user={chat_id} group={target_group_id}")
     except Exception as e:
         print(f"[webhook] FAILED to send invite: {e!r}")
 
     return {"ok": True, "handled": True, "invoice_id": inv_id}
+
