@@ -1,154 +1,148 @@
-// Mini App: uniform price & groups dari Railway (via /api/config)
-const tg = window.Telegram?.WebApp; tg?.expand?.();
-const API_BASE = (window.API_BASE ?? "").replace(/\/+$/,""); // set di index.html jika beda origin
+// Telegram Mini App client – QR disajikan sebagai URL PNG langsung
 
-const state = {
-  price_idr: 0,
-  groups: [], // {id,label}
-  cart: new Set(),
-};
+const tg = window.Telegram?.WebApp;
+tg?.expand();
 
-const $   = s => document.querySelector(s);
-const idr = n => (n||0).toLocaleString("id-ID");
-const esc = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const buildUrl = p => (API_BASE ? `${API_BASE}${p}` : p);
+// (opsional) link bantu
+const yourSaweriaUrl = "https://saweria.co/payments";
 
-function getUserId(){
+// -------- util ----------
+function getUserId() {
   const fromInit = tg?.initDataUnsafe?.user?.id;
   if (fromInit) return fromInit;
-  const v = new URLSearchParams(location.search).get("uid");
-  return v ? parseInt(v,10) : null; // untuk dev di browser
+  const qp = new URLSearchParams(window.location.search);
+  const fromQuery = qp.get("uid");
+  return fromQuery ? parseInt(fromQuery, 10) : null;
+}
+function htmlEscape(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
 }
 
-function total(){ return state.price_idr * state.cart.size; }
-
-function updateBar(){
-  $("#count").textContent = String(state.cart.size);
-  $("#total").textContent = idr(total());
-  $("#checkout").disabled = state.cart.size === 0;
-}
-
-function renderList(){
-  const box = $("#list"); box.innerHTML = "";
-  state.groups.forEach(g=>{
-    const chosen = state.cart.has(g.id);
-    const wrap = document.createElement("div");
-    wrap.className = "card";
-    wrap.innerHTML = `
-      <div style="flex:1">
-        <div class="title">${esc(g.label || g.id)}</div>
-        <div class="muted">${g.id}</div>
-      </div>
-      <div class="price">Rp ${idr(state.price_idr)}</div>
-      <div class="actions">
-        <button class="${chosen ? "danger" : "primary"} btn-toggle" data-id="${g.id}">
-          ${chosen ? "Hapus" : "Tambah ke Keranjang"}
-        </button>
-      </div>
-    `;
-    box.appendChild(wrap);
-  });
-
-  document.querySelectorAll(".btn-toggle").forEach(btn=>{
-    btn.addEventListener("click", e=>{
-      const gid = e.currentTarget.getAttribute("data-id");
-      if (!gid) return;
-      if (state.cart.has(gid)) state.cart.delete(gid); else state.cart.add(gid);
-      updateBar(); renderList();
-    });
+// ------- render daftar grup (boleh di-inject dari server lewat window.injectedGroups) ------
+async function renderGroups() {
+  const groups = (window.injectedGroups || [
+    { id: "-1002593237267", label: "Group Model" },
+    { id: "-1001320707949", label: "Group A" },
+    { id: "-1002306015599", label: "Group S" },
+  ]);
+  const wrap = document.getElementById("groups");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  groups.forEach((g, idx) => {
+    const el = document.createElement("label");
+    el.style.display = "block";
+    el.innerHTML = `<input type="checkbox" ${idx===0 ? "checked" : ""} value="${g.id}"/> ${htmlEscape(g.label)}`;
+    wrap.appendChild(el);
   });
 }
+renderGroups();
 
-function showSection(id){
-  ["list","confirm","payview"].forEach(sec=>{
-    const el = document.getElementById(sec);
-    if (el) el.style.display = (sec===id ? "block" : "none");
-  });
-}
+// ------------- aksi bayar ----------------
+document.getElementById("pay")?.addEventListener("click", onPay);
 
-function toast(msg){ console.error(msg); alert(msg); }
+async function onPay() {
+  const selected = [...document.querySelectorAll("#groups input:checked")].map(i => i.value);
+  const amount = parseInt(document.getElementById("amount")?.value || "0", 10);
 
-async function loadConfig(){
-  const r = await fetch(buildUrl("/api/config"));
-  if (!r.ok){
-    const t = await r.text().catch(()=> "");
-    throw new Error(`/api/config error (${r.status}) ${t}`);
+  if (!selected.length) return alert("Pilih minimal 1 grup");
+  if (!Number.isFinite(amount) || amount <= 0) return alert("Masukkan nominal pembayaran yang valid (> 0)");
+
+  const userId = getUserId();
+  const qrContainer = document.getElementById("qr");
+  if (!userId) {
+    qrContainer.innerHTML =
+      `<div style="color:#c00">Gagal membaca user Telegram. Tutup & buka lagi Mini App via tombol bot.</div>`;
+    return;
   }
-  const data = await r.json();
-  state.price_idr = Number(data?.price_idr || 0);
-  state.groups   = Array.isArray(data?.groups) ? data.groups : [];
-  if (!state.price_idr || !state.groups.length){
-    throw new Error("Config tidak valid: price atau groups kosong");
-  }
-}
 
-async function checkout(){
-  const chosen = Array.from(state.cart);
-  if (!chosen.length) return;
-  const itemsHtml = chosen.map(gid=>{
-    const g = state.groups.find(x=>x.id===gid);
-    return `<li>${esc(g?.label||gid)} — Rp ${idr(state.price_idr)}</li>`;
-  }).join("");
-  $("#confirm-items").innerHTML = `<ol class="list-compact">${itemsHtml}</ol>`;
-  $("#confirm-total").textContent = "Total: Rp " + idr(total());
-  showSection("confirm");
-}
-
-async function createInvoiceAndPay(){
-  const uid = getUserId();
-  if (!uid) return toast("User ID tidak terbaca. Buka dari Telegram atau pakai ?uid=123 saat uji coba.");
-  const groups = Array.from(state.cart);
-
-  try{
-    const res = await fetch(buildUrl("/api/invoice"), {
+  // 1) Buat invoice di server
+  let inv;
+  try {
+    const res = await fetch(`${window.location.origin}/api/invoice`, {
       method: "POST",
-      headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ user_id: uid, groups }) // amount dihitung di server
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId, groups: selected, amount }),
     });
-    if (!res.ok){
-      const txt = await res.text().catch(()=> "");
-      throw new Error(`Gagal membuat invoice (${res.status}). ${txt || ""}`);
-    }
-    const data = await res.json();
-    const invoiceId = data?.invoice_id;
-    if (!invoiceId) throw new Error("invoice_id tidak ada di respons server");
-
-    $("#inv-id").textContent = invoiceId;
-    $("#inv-amt").textContent = "Rp " + idr(total());
-    showSection("payview");
-
-    const img = document.createElement("img");
-    img.alt = "QRIS";
-    img.src = buildUrl(`/api/qr/${invoiceId}.png`);
-    const qr = $("#qr"); qr.innerHTML = ""; qr.appendChild(img);
-
-    pollUntilPaid(invoiceId);
-  }catch(e){ toast("Error: " + (e?.message || e)); }
-}
-
-async function pollUntilPaid(invoiceId){
-  let tries=0, maxTries=120;
-  $("#btn-done").onclick = () => checkOnce();
-  async function checkOnce(){
-    try{
-      const r = await fetch(buildUrl(`/api/invoice/${invoiceId}/status`));
-      if (!r.ok) return;
-      const s = await r.json();
-      if ((s?.status||"").toUpperCase() === "PAID") tg?.close?.();
-    }catch{}
+    if (!res.ok) throw new Error(await res.text());
+    inv = await res.json(); // { invoice_id: "..." }
+  } catch (e) {
+    qrContainer.innerHTML =
+      `<div style="color:#c00">Create invoice gagal: ${htmlEscape(e.message || String(e))}</div>`;
+    return;
   }
-  const timer = setInterval(async ()=>{
-    tries++; await checkOnce();
-    if (tries>=maxTries) clearInterval(timer);
-  }, 2500);
-}
 
-async function boot(){
-  try { await loadConfig(); }
-  catch(e){ return toast(e.message || e); }
-  renderList(); updateBar(); showSection("list");
-  $("#checkout").addEventListener("click", checkout);
-  $("#btn-back").addEventListener("click", ()=> showSection("list"));
-  $("#btn-pay").addEventListener("click", createInvoiceAndPay);
+  // 2) Susun tampilan + QR IMG LANGSUNG
+  const ref = `INV:${inv.invoice_id}`;
+  const qrPngUrl = `${window.location.origin}/api/qr/${inv.invoice_id}.png?amount=${amount}&msg=${encodeURIComponent(ref)}`;
+
+  qrContainer.innerHTML = `
+    <div><b>Pembayaran GoPay</b></div>
+    <div id="qruistate" style="margin:8px 0 12px 0; opacity:.85">QRIS GoPay sedang dimuat…</div>
+
+    <div id="qrwrap" style="margin-bottom:8px"></div>
+
+    <div style="margin-top:8px"><b>Kode pembayaran:</b> <code id="invcode">${htmlEscape(ref)}</code>
+      <button id="copyinv" style="margin-left:6px">Copy</button>
+    </div>
+    <ol style="margin-top:8px;padding-left:18px">
+      <li>Jika perlu, buka: <a href="${yourSaweriaUrl}" target="_blank" rel="noopener">${yourSaweriaUrl}</a></li>
+      <li>Tempel kode <b>${htmlEscape(ref)}</b> di kolom <i>pesan</i> sebelum bayar (opsional bila scan QR).</li>
+      <li>Setelah bayar, Mini App menutup otomatis dan bot mengirim link undangan.</li>
+    </ol>
+
+    <div id="wait" style="margin-top:12px">
+      <b>Menunggu pembayaran…</b>
+      <div id="spinner" style="opacity:.75">Bot akan kirim undangan otomatis setelah pembayaran diterima.</div>
+      <button id="btn-done" style="margin-top:8px">Saya sudah bayar</button>
+    </div>
+  `;
+
+  // sisipkan IMG QR; biarkan browser "menunggu" sampai server selesai render PNG
+  const img = document.createElement("img");
+  img.id = "qrimg";
+  img.alt = "GoPay QR";
+  img.src = qrPngUrl + `&t=${Date.now()}`;     // cache buster
+  img.onload = () => {
+    const st = document.getElementById("qruistate");
+    if (st) st.textContent = "QRIS GoPay siap. Silakan scan dengan GoPay.";
+  };
+  img.onerror = () => {
+    const st = document.getElementById("qruistate");
+    if (st) st.innerHTML = `<span style="color:#c00">QRIS gagal dimuat.</span> Coba buka <a href="${yourSaweriaUrl}" target="_blank" rel="noopener">Saweria</a> dan tempel kode di atas.`;
+  };
+  document.getElementById("qrwrap")?.appendChild(img);
+
+  // tombol copy
+  document.getElementById('copyinv')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(ref);
+      const btn = document.getElementById('copyinv');
+      btn.textContent = "Copied!";
+      setTimeout(() => (btn.textContent = "Copy"), 1500);
+    } catch (_) {}
+  });
+
+  // 3) POLLING status pembayaran (auto-close saat PAID)
+  const statusUrl = `${window.location.origin}/api/invoice/${inv.invoice_id}/status`;
+  let pollPaidTimer = setInterval(checkPaid, 2000);
+  document.getElementById('btn-done')?.addEventListener("click", () => checkPaid(true));
+
+  async function checkPaid(manual = false) {
+    try {
+      const r = await fetch(statusUrl);
+      if (!r.ok) return;
+      const s = await r.json(); // {status: "PENDING"|"PAID", ...}
+      if (s.status === "PAID") {
+        clearInterval(pollPaidTimer);
+        const wait = document.getElementById('wait');
+        if (wait) wait.innerHTML = `<div style="color:green"><b>Pembayaran diterima.</b> Undangan dikirim via DM bot.</div>`;
+        setTimeout(() => tg?.close?.(), 2000);
+      } else if (manual) {
+        const sp = document.getElementById('spinner');
+        if (sp) sp.textContent = "Belum terdeteksi. Jika sudah bayar, tunggu beberapa detik…";
+      }
+    } catch (_) {}
+  }
 }
-document.addEventListener("DOMContentLoaded", boot);
