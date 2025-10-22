@@ -1,4 +1,4 @@
-# --- app/bot.py (drop-in replacement) ---
+# app/bot.py
 
 from dotenv import load_dotenv
 load_dotenv()  # baca .env saat jalan lokal
@@ -7,7 +7,7 @@ import os, json, time
 from telegram import Update, WebAppInfo, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# Baca env aman (tidak meledak kalau kosong)
+# Baca env aman
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError(
@@ -21,10 +21,8 @@ def build_app() -> Application:
     return Application.builder().token(BOT_TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # URL Mini App + fallback uid
-    base = os.environ["BASE_URL"]
     uid = update.effective_user.id
-    webapp_url = f"{base}/webapp/index.html?uid={uid}"
+    webapp_url = f"{BASE_URL}/webapp/index.html?uid={uid}"
 
     kb = [[KeyboardButton(
         text="🛍️ Buka Katalog",
@@ -35,11 +33,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
     )
 
-
-# Penting: gunakan Application (app) agar bisa dipanggil dari FastAPI webhook tanpa Context
-# potongan penting
 async def send_invite_link(app: Application, chat_id: int, target_group_id: str):
-    import time
     expire = int(time.time()) + 15*60
     link = await app.bot.create_chat_invite_link(
         chat_id=target_group_id,

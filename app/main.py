@@ -1,5 +1,5 @@
 # app/main.py
-import os, json, re, hmac, hashlib, httpx
+import os, json, re, hmac, hashlib
 from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException
@@ -59,6 +59,9 @@ register_handlers(bot_app)
 
 @app.on_event("startup")
 async def on_start():
+    print("[startup] init DB…")
+    storage.init_db()
+
     print("[startup] launching bot app…")
     await bot_app.initialize()
     if BASE_URL.startswith("https://"):
@@ -81,7 +84,6 @@ async def on_stop():
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
     if WEBHOOK_SECRET:
-        # Telegram kirim header 'X-Telegram-Bot-Api-Secret-Token'
         token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
         if token != WEBHOOK_SECRET:
             raise HTTPException(status_code=401, detail="bad secret")
@@ -110,7 +112,7 @@ def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
         inv = storage.create_invoice(user_id, group_id, amount)  # type: ignore
     else:
         inv = {
-            "invoice_id": f"{os.urandom(16).hex()}",
+            "invoice_id": os.urandom(16).hex(),
             "user_id": user_id,
             "group_id": group_id,
             "amount": amount,
@@ -145,11 +147,6 @@ INV_KEY_RE = re.compile(r"(INV[:：]?\s*([A-Za-z0-9]{4,16}))", re.I)
 UUID_RE    = re.compile(r"\b[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\b", re.I)
 
 def _extract_invoice_key(data: Any) -> Optional[str]:
-    """
-    Ambil "key" pendek yg bisa berupa:
-    - INV:XXXX (mengembalikan XXXX)
-    - UUID panjang (mengembalikan 8 char pertama)
-    """
     candidates: List[str] = []
     if isinstance(data, dict):
         for k in ["message","pesan","note","notes","comment","payload","metadata","data","custom_field","custom","order_id","invoice_id","id"]:
@@ -189,7 +186,6 @@ async def api_create_invoice(payload: CreateInvoiceIn):
         ],
     }
 
-# === helper cari invoice by code/prefix dan fallback ===
 def _storage_find_by_code_prefix(prefix: str):
     prefix = prefix.strip().upper().replace("INV:", "")
     if hasattr(storage, "list_invoices"):
@@ -221,16 +217,12 @@ async def api_status(invoice_id: str):
 # ==================================================
 # ===============  SAWERIA WEBHOOK  ================
 # ==================================================
-# Saweria → POST ke /webhook/saweria
 
-# Pola “INV:xxxx” versi penuh (berbeda dgn INV_KEY_RE)
 INV_FULL_RE = re.compile(r"(INV[:：]\s*[A-Za-z0-9\-]+)", re.I)
 
 def _extract_invoice_id_from_payload(data: Any) -> Optional[str]:
-    """Coba cari INV:xxxx dari berbagai field (pesan/note/metadata)."""
     if data is None:
         return None
-
     candidates: List[str] = []
     if isinstance(data, dict):
         for k in ["message", "pesan", "note", "notes", "comment", "payload", "metadata", "data", "custom_field", "custom"]:
@@ -244,7 +236,6 @@ def _extract_invoice_id_from_payload(data: Any) -> Optional[str]:
         candidates.append(json.dumps(data))
     elif isinstance(data, str):
         candidates.append(data)
-
     for text in candidates:
         m = INV_FULL_RE.search(text or "")
         if m:
@@ -252,7 +243,6 @@ def _extract_invoice_id_from_payload(data: Any) -> Optional[str]:
     return None
 
 def _is_success_status(data: Any) -> bool:
-    # fleksibel: cari status sukses
     if isinstance(data, dict):
         s = str(data.get("status", "")).upper()
         if s in {"PAID", "SUCCESS", "COMPLETED"}:
@@ -263,7 +253,6 @@ def _is_success_status(data: Any) -> bool:
             return True
     return False
 
-# === verifikasi signature (relaxed) ===
 def _verify_signature(request: Request, raw_body: bytes) -> bool:
     if not WEBHOOK_SECRET:
         return True
@@ -296,7 +285,7 @@ async def webhook_saweria(request: Request):
     if key:
         inv = _storage_find_by_code_prefix(key)
         if not inv:
-            inv = _storage_get(key)  # jika key kebetulan = invoice_id penuh
+            inv = _storage_get(key)
 
     if not inv:
         inv = _storage_get_pending_only()
@@ -306,14 +295,13 @@ async def webhook_saweria(request: Request):
     if not inv:
         return JSONResponse({"ok": True, "message": "invoice not found"}, status_code=200)
 
-    # treat as success sementara
     inv_id = str(inv.get("invoice_id"))
     inv = _storage_update_status(inv_id, "PAID")
     print(f"[webhook] marked PAID for {inv_id}")
 
     try:
         chat_id = int(inv["user_id"])
-        target_group_id = str(inv["group_id"])
+        target_group_id = str(inv.get("group_id") or "")
         await send_invite_link(bot_app, chat_id, target_group_id)
         print(f"[webhook] invite sent → user={chat_id} group={target_group_id}")
     except Exception as e:
