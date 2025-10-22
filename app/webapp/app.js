@@ -181,3 +181,25 @@ function recalcAmountFromGroups() {
   // Recalc saat awal render juga (jaga-jaga jika ada default tercentang)
   setTimeout(recalcAmountFromGroups, 0);
 })();
+
+
+// helper format rupiah
+function formatRupiah(n) {
+  if (!Number.isFinite(n)) return "0";
+  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+/** sinkronkan tampilan total (Rp) dengan nilai #amount */
+function syncTotalText() {
+  const tt = document.getElementById('total-text');
+  const amt = parseInt(document.getElementById('amount')?.value || '0', 10);
+  if (tt) tt.textContent = formatRupiah(amt || 0);
+}
+
+// update saat user ganti pilihan grup
+document.getElementById('groups')?.addEventListener('change', () => {
+  setTimeout(syncTotalText, 0); // setelah recalcAmountFromGroups jalan
+});
+
+// set nilai awal tampilan total
+setTimeout(syncTotalText, 0);
