@@ -146,3 +146,38 @@ async function onPay() {
     } catch (_) {}
   }
 }
+
+
+// === Auto-calc total based on selected groups =====================
+// Harga per grup (IDR)
+const PRICE_PER_GROUP = 25000;
+
+// Hitung ulang total saat user centang/menyangga pilihan
+function recalcAmountFromGroups() {
+  try {
+    const checked = document.querySelectorAll('#groups input[type="checkbox"]:checked');
+    const amountEl = document.getElementById('amount');
+    if (!amountEl) return;
+    const total = (checked?.length || 0) * PRICE_PER_GROUP;
+    if (total > 0) {
+      amountEl.value = String(total);
+    } else {
+      // fallback jika belum ada yang dipilih, biarkan default di input
+    }
+  } catch (_) {}
+}
+
+// Pasang event listener delegasi pada container groups
+(function initGroupRecalc() {
+  const container = document.getElementById('groups');
+  if (!container) return;
+  container.addEventListener('change', (e) => {
+    // hanya respons saat checkbox berubah
+    const t = e.target;
+    if (t && t.matches && t.matches('input[type="checkbox"]')) {
+      recalcAmountFromGroups();
+    }
+  });
+  // Recalc saat awal render juga (jaga-jaga jika ada default tercentang)
+  setTimeout(recalcAmountFromGroups, 0);
+})();
