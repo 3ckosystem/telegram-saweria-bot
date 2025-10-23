@@ -1,6 +1,7 @@
 # app/main.py
 import os, json, re, hmac, hashlib
 from typing import Optional, List, Dict, Any
+from pathlib import Path
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -49,21 +50,57 @@ GROUPS = parse_groups(GROUPS_ENV)
 # ===================== FastAPI =====================
 app = FastAPI(title="Telegram × Saweria Bot")
 
-# Static: /public (opsional)
-if os.path.isdir("public"):
-    app.mount("/public", StaticFiles(directory="public"), name="public")
+# ---------- Static mounts ----------
+def _resolve_webapp_dir() -> Optional[Path]:
+    """
+    Cari folder 'webapp' di beberapa lokasi umum secara absolut.
+    Bisa juga override via env WEBAPP_DIR.
+    """
+    # 1) explicit override
+    if os.getenv("WEBAPP_DIR"):
+        p = Path(os.getenv("WEBAPP_DIR")).resolve()
+        if p.is_dir():
+            return p
 
-# Static: /webapp (WAJIB untuk Mini App)
-# letakkan file HTML/JS kamu di folder app root "webapp/"
-if os.path.isdir("webapp"):
-    app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webapp")
+    here = Path(__file__).resolve().parent          # /app/app
+    repo_root = here.parent                          # /app
+
+    candidates = [
+        here / "webapp",            # /app/app/webapp
+        repo_root / "webapp",       # /app/webapp
+        Path.cwd() / "webapp",      # CWD/webapp
+        Path.cwd() / "app" / "webapp",
+    ]
+    for p in candidates:
+        if p.is_dir():
+            return p.resolve()
+    return None
+
+# /public (opsional)
+public_dir = None
+for cand in [Path(__file__).resolve().parent / "public", Path.cwd() / "public"]:
+    if cand.is_dir():
+        public_dir = cand.resolve()
+        break
+
+if public_dir:
+    print(f"[static] Mounting /public -> {public_dir}")
+    app.mount("/public", StaticFiles(directory=str(public_dir)), name="public")
+
+# /webapp (WAJIB untuk Mini App)
+WEBAPP_DIR = _resolve_webapp_dir()
+if WEBAPP_DIR:
+    print(f"[static] Mounting /webapp -> {WEBAPP_DIR}")
+    app.mount("/webapp", StaticFiles(directory=str(WEBAPP_DIR), html=True), name="webapp")
+else:
+    print("[static] WARNING: folder 'webapp' tidak ditemukan. /webapp akan 404")
 
 # root: redirect ke /webapp/ bila ada
 @app.get("/")
 def root():
-    if os.path.isdir("webapp"):
+    if WEBAPP_DIR:
         return RedirectResponse(url="/webapp/")
-    return {"ok": True, "message": "Service is running."}
+    return {"ok": True, "message": "Service is running. Put your front-end in a 'webapp/' folder."}
 
 # ---------- Telegram Bot lifecycle ----------
 bot_app: Application = build_app()
@@ -120,8 +157,16 @@ def _storage_get(invoice_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
+    """
+    storage.create_invoice() di storage.py menerima (user_id, groups: List[str], amount)
+    jadi kita bungkus group_id menjadi list.
+    """
     if hasattr(storage, "create_invoice"):
-        inv = storage.create_invoice(user_id, group_id, amount)  # type: ignore
+        try:
+            inv = storage.create_invoice(user_id, [group_id], amount)  # type: ignore
+        except TypeError:
+            # fallback bila signature berbeda di storage custom
+            inv = storage.create_invoice(user_id, group_id, amount)  # type: ignore
     else:
         inv = {
             "invoice_id": os.urandom(16).hex(),
@@ -155,7 +200,6 @@ def _storage_update_status(invoice_id: str, status: str) -> Optional[Dict[str, A
     return inv
 
 # === Regex utk ekstraksi key/kode invoice dari payload webhook ===
-import re
 INV_KEY_RE = re.compile(r"(INV[:：]?\s*([A-Za-z0-9]{4,16}))", re.I)
 UUID_RE    = re.compile(r"\b[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\b", re.I)
 
@@ -314,7 +358,8 @@ async def webhook_saweria(request: Request):
 
     try:
         chat_id = int(inv["user_id"])
-        target_group_id = str(inv.get("group_id") or "")
+        # jika storage.create_invoice menyimpan groups sebagai list:
+        target_group_id = str(inv.get("group_id") or (inv.get("groups") or [""])[0])
         await send_invite_link(bot_app, chat_id, target_group_id)
         print(f"[webhook] invite sent → user={chat_id} group={target_group_id}")
     except Exception as e:
