@@ -20,10 +20,20 @@ BASE_URL       = os.environ["BASE_URL"].strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 ENV            = os.getenv("ENV", "dev")
 
-GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "[]")
+# ==== GROUPS ====
+GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "").strip()
 
 def parse_groups(env_val: str) -> List[Dict[str, str]]:
+    """
+    Format didukung:
+    - JSON list of dicts: [{"id":"-100123","name":"VIP","initial":"25000"}]
+    - JSON dict map: {"-100123":"VIP", "-100234":"General"}
+    - JSON list of strings: ["-100123","-100234"]
+    - String tunggal: "-100123"
+    """
     groups: List[Dict[str, str]] = []
+    if not env_val:
+        return groups
     try:
         data = json.loads(env_val)
         if isinstance(data, dict):
@@ -34,41 +44,50 @@ def parse_groups(env_val: str) -> List[Dict[str, str]]:
                 if isinstance(it, dict):
                     gid = str(it.get("id") or it.get("group_id") or it.get("value") or "").strip()
                     nm  = str(it.get("name") or it.get("label")    or it.get("text")  or "").strip()
-                    init = str(it.get("initial") or "").strip()
+                    init = str(it.get("initial") or it.get("price") or "").strip()
                     if gid and nm:
-                        groups.append({"id": gid, "name": nm, "initial": init})
+                        d = {"id": gid, "name": nm}
+                        if init:
+                            d["initial"] = init
+                        groups.append(d)
                 else:
                     gid = str(it).strip()
                     if gid:
                         groups.append({"id": gid, "name": gid})
+        else:
+            s = str(data).strip()
+            if s:
+                groups.append({"id": s, "name": s})
     except Exception:
-        pass
+        # kalau bukan JSON, anggap string biasa
+        s = env_val.strip()
+        if s:
+            groups.append({"id": s, "name": s})
     return groups
 
 GROUPS = parse_groups(GROUPS_ENV)
+
+# Fallback: dukung 1 var GROUP_ID agar tidak kosong sama sekali
+if not GROUPS:
+    fallback_gid = os.getenv("GROUP_ID") or os.getenv("TELEGRAM_GROUP_ID")
+    if fallback_gid:
+        GROUPS = [{"id": fallback_gid.strip(), "name": "Default Group"}]
 
 # ===================== FastAPI =====================
 app = FastAPI(title="Telegram × Saweria Bot")
 
 # ---------- Static mounts ----------
 def _resolve_webapp_dir() -> Optional[Path]:
-    """
-    Cari folder 'webapp' di beberapa lokasi umum secara absolut.
-    Bisa juga override via env WEBAPP_DIR.
-    """
-    # 1) explicit override
     if os.getenv("WEBAPP_DIR"):
         p = Path(os.getenv("WEBAPP_DIR")).resolve()
         if p.is_dir():
             return p
-
-    here = Path(__file__).resolve().parent          # /app/app
-    repo_root = here.parent                          # /app
-
+    here = Path(__file__).resolve().parent
+    repo_root = here.parent
     candidates = [
-        here / "webapp",            # /app/app/webapp
-        repo_root / "webapp",       # /app/webapp
-        Path.cwd() / "webapp",      # CWD/webapp
+        here / "webapp",
+        repo_root / "webapp",
+        Path.cwd() / "webapp",
         Path.cwd() / "app" / "webapp",
     ]
     for p in candidates:
@@ -87,7 +106,7 @@ if public_dir:
     print(f"[static] Mounting /public -> {public_dir}")
     app.mount("/public", StaticFiles(directory=str(public_dir)), name="public")
 
-# /webapp (WAJIB untuk Mini App)
+# /webapp (Mini App)
 WEBAPP_DIR = _resolve_webapp_dir()
 if WEBAPP_DIR:
     print(f"[static] Mounting /webapp -> {WEBAPP_DIR}")
@@ -101,6 +120,25 @@ def root():
     if WEBAPP_DIR:
         return RedirectResponse(url="/webapp/")
     return {"ok": True, "message": "Service is running. Put your front-end in a 'webapp/' folder."}
+
+# ---------- ENDPOINT CONFIG/GRUPS UNTUK FRONT-END ----------
+@app.get("/api/groups")
+def api_groups():
+    """
+    Endpoint yang dikonsumsi front-end untuk daftar grup.
+    """
+    return {"ok": True, "groups": GROUPS}
+
+@app.get("/webapp/config.json")
+def webapp_config():
+    """
+    Alternatif jika front-end load /webapp/config.json.
+    """
+    return {
+        "baseUrl": BASE_URL,
+        "groups": GROUPS,
+        "env": ENV,
+    }
 
 # ---------- Telegram Bot lifecycle ----------
 bot_app: Application = build_app()
@@ -165,7 +203,6 @@ def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
         try:
             inv = storage.create_invoice(user_id, [group_id], amount)  # type: ignore
         except TypeError:
-            # fallback bila signature berbeda di storage custom
             inv = storage.create_invoice(user_id, group_id, amount)  # type: ignore
     else:
         inv = {
@@ -178,7 +215,7 @@ def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
         if hasattr(storage, "save_invoice"):
             storage.save_invoice(inv)  # type: ignore
 
-    # kode pendek
+    # buat kode pendek
     inv_id = str(inv.get("invoice_id", ""))
     short = inv_id.replace("INV:", "").replace("inv:", "").replace("-", "")[:8].upper()
     code = f"INV:{short}" if short else f"INV:{os.urandom(4).hex().upper()}"
@@ -358,7 +395,7 @@ async def webhook_saweria(request: Request):
 
     try:
         chat_id = int(inv["user_id"])
-        # jika storage.create_invoice menyimpan groups sebagai list:
+        # storage.create_invoice menyimpan groups sebagai list:
         target_group_id = str(inv.get("group_id") or (inv.get("groups") or [""])[0])
         await send_invite_link(bot_app, chat_id, target_group_id)
         print(f"[webhook] invite sent → user={chat_id} group={target_group_id}")
