@@ -1,6 +1,7 @@
 # app/main.py
-import os, json, re, hmac, hashlib
+import os, json, re, hmac, hashlib, base64
 from typing import Optional, List, Dict, Any
+from io import BytesIO
 from pathlib import Path
 
 from fastapi import FastAPI, Request, HTTPException
@@ -23,6 +24,9 @@ ENV             = os.getenv("ENV", "dev")
 
 PRICE_IDR       = int(os.getenv("PRICE_IDR", "25000"))
 DEFAULT_PRICE   = PRICE_IDR
+
+# untuk tombol “buka Saweria”
+SAWERIA_PAY_URL = os.getenv("SAWERIA_PAY_URL", "https://saweria.co/payments")
 
 GROUPS_ENV = (os.environ.get("GROUP_IDS_JSON") or "").strip()
 
@@ -133,6 +137,7 @@ def _groups_payload():
         "price": PRICE_IDR,
         "price_idr": PRICE_IDR,
         "defaultPrice": DEFAULT_PRICE,
+        "payments": {"saweria_url": SAWERIA_PAY_URL},
     }
 
 @app.get("/api/groups")
@@ -265,7 +270,6 @@ def _extract_invoice_key(data: Any) -> Optional[str]:
 
 @app.post("/api/invoice")
 async def api_create_invoice(payload: CreateInvoiceIn):
-    # Normalisasi: pakai group_id jika ada; kalau tidak, ambil first dari groups[]
     gid = (payload.group_id or (payload.groups[0] if payload.groups else None))
     if not gid:
         raise HTTPException(422, detail="group_id is required (send 'group_id' or 'groups[0]')")
@@ -280,6 +284,51 @@ async def api_create_invoice(payload: CreateInvoiceIn):
             "Setelah bayar, bot akan kirim link undangan ke DM kamu."
         ],
     }
+
+# ---- QR / QRIS (pseudo) generator ----
+def _make_qr_data_url(text: str, box_size: int = 10, border: int = 2) -> Optional[str]:
+    try:
+        import qrcode
+        from PIL import Image  # noqa: F401 (needed by qrcode)
+    except Exception as e:
+        print(f"[qris] qrcode/Pillow not installed: {e!r}")
+        return None
+    qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=box_size, border=border)
+    qr.add_data(text)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    data = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{data}"
+
+@app.get("/api/qris/{invoice_id}")
+def api_qris(invoice_id: str):
+    inv = _storage_get(invoice_id)
+    if not inv:
+        raise HTTPException(404, "invoice not found")
+
+    # jika sudah pernah dibuat, pakai yang tersimpan
+    existing = inv.get("qris_payload")
+    if existing:
+        return {"ok": True, "data_url": existing, "source": "cache"}
+
+    # konten yang diencode ke QR:
+    # wallet bisa saja tidak mengenali sebagai QRIS, tapi tetap membantu user scan & diarahkan.
+    code = str(inv.get("code") or f"INV:{str(inv.get('invoice_id'))[:8].upper()}")
+    text = f"{code} | {SAWERIA_PAY_URL}"
+
+    data_url = _make_qr_data_url(text)
+    if not data_url:
+        # fallback: kirim none, FE akan menampilkan “QRIS gagal dimuat”
+        return {"ok": False, "reason": "qrcode_not_installed", "saweria_url": SAWERIA_PAY_URL, "code": code}
+
+    try:
+        storage.update_qris_payload(invoice_id, data_url)
+    except Exception as e:
+        print(f"[qris] failed to store payload: {e!r}")
+
+    return {"ok": True, "data_url": data_url, "saweria_url": SAWERIA_PAY_URL, "code": code}
 
 def _storage_find_by_code_prefix(prefix: str):
     prefix = prefix.strip().upper().replace("INV:", "")
