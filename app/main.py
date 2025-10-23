@@ -338,78 +338,48 @@ def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
     calc = hmac.new(SAWERIA_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(calc, sig_hdr)
 
-@app.post("/api/saweria/webhook")
+# ------------- WEBHOOK: Saweria / Gateway -------------
+@app.post("/webhook/saweria")
 async def saweria_webhook(request: Request):
-    # Buat webhook sepenuhnya anti-crash & informatif
-    try:
-        raw = await request.body()
+    # (opsional) verifikasi HMAC di sini jika kamu pakai signature
+    data = await request.json()
 
-        # --- verifikasi signature (tidak bikin 500)
-        if SAWERIA_WEBHOOK_SECRET:
-            sig_hdr = request.headers.get("X-Saweria-Signature")
-            calc = hmac.new(SAWERIA_WEBHOOK_SECRET.encode(), raw, hashlib.sha256).hexdigest()
-            if not sig_hdr or not hmac.compare_digest(calc, sig_hdr):
-                return JSONResponse({"ok": False, "reason": "bad signature"}, status_code=403)
+    # Normalisasi field status & pesan (tiap gateway bisa beda)
+    status = (data.get("status") or data.get("event") or "").upper()
+    note = (
+        data.get("message")
+        or data.get("note")
+        or data.get("msg")
+        or data.get("payload")
+        or ""
+    )
 
-        # --- parse body JSON aman
+    # Cari pola "INV:<uuid>" di pesan/catatan
+    m = re.search(r"INV:([0-9a-fA-F\-]{36})", str(note))
+    if not m:
+        # Tidak ada invoice id — jangan error, biar idempotent & gampang debug
+        return JSONResponse({"ok": True, "skip": "no-invoice-id"}, status_code=200)
+
+    invoice_id = m.group(1)
+
+    # Terima hanya status final
+    if status not in ("PAID", "SETTLEMENT"):
+        return JSONResponse({"ok": True, "skip": f"status {status}"}, status_code=200)
+
+    # Tandai PAID (idempotent) lalu ambil row invoice
+    inv = payments.mark_paid(invoice_id)
+    if not inv:
+        inv = payments.get_invoice(invoice_id)
+
+    # Kirim undangan ke semua grup pada invoice (idempotent-ish via invite_logs)
+    if inv:
         try:
-            body = json.loads(raw.decode() or "{}")
+            await _send_invites_for_invoice(inv)
         except Exception as e:
-            return {"ok": False, "reason": f"bad json: {e.__class__.__name__}"}
+            # Jangan balas non-200 agar gateway tidak retry berlebihan
+            print("[webhook][send_invite][error]:", repr(e))
 
-        status = str(body.get("status") or "").lower()
-        if status != "paid":
-            return {"ok": True, "ignored": True}
-
-        # --- cari kandidat invoice_id
-        candidate_id = (str(body.get("invoice_id") or "")).strip()
-        if not candidate_id:
-            ext = body.get("external_id")
-            if ext is not None:
-                candidate_id = str(ext).strip()
-
-        if not candidate_id:
-            msg = body.get("message") or ""
-            m = _UUID_RE.search(msg)
-            if m:
-                candidate_id = m.group(1)
-
-        if not candidate_id:
-            return {"ok": False, "reason": "no invoice id in payload"}
-
-        # --- tandai PAID & ambil invoice (tanpa 500)
-        try:
-            inv = payments.mark_paid(candidate_id)
-        except Exception as e:
-            return {"ok": False, "reason": f"mark_paid error: {e.__class__.__name__}", "invoice_id": candidate_id}
-
-        if not inv:
-            inv = payments.get_invoice(candidate_id)
-        if not inv:
-            return {"ok": False, "reason": "invoice not found", "invoice_id": candidate_id}
-
-        # --- kirim undangan
-        try:
-            groups = json.loads(inv.get("groups_json") or "[]")
-        except Exception:
-            groups = []
-
-        sent, failed = [], []
-        for gid in groups:
-            try:
-                await send_invite_link(bot_app, inv["user_id"], gid)
-                _safe_invite_log(inv["invoice_id"], gid, "(sent-via-webhook)", None)
-                sent.append(gid)
-            except Exception as e:
-                _safe_invite_log(inv["invoice_id"], gid, None, str(e))
-                failed.append({"group_id": gid, "error": str(e)})
-
-        return {"ok": True, "invoice_id": inv["invoice_id"], "sent": sent, "failed": failed}
-
-    except Exception as e:
-        # absolutely no 500
-        return JSONResponse({"ok": False, "unhandled": str(e)}, status_code=200)
-
+    return JSONResponse({"ok": True}, status_code=200)
 
 # >>> ADD: endpoint manual trigger kirim undangan (untuk debug)
 @app.post("/api/invoice/{invoice_id}/send-invites")
