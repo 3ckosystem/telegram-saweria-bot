@@ -319,41 +319,44 @@ def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
         return False
     calc = hmac.new(SAWERIA_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(calc, sig_hdr)
-
 @app.post("/api/saweria/webhook")
 async def saweria_webhook(request: Request):
     raw = await request.body()
 
-    # Verifikasi signature -> jangan 500
-    if not _verify_saweria_signature(request, raw):
-        return JSONResponse({"ok": False, "reason": "bad signature"}, status_code=403)
+    # --- verifikasi signature (tidak bikin 500)
+    if SAWERIA_WEBHOOK_SECRET:
+        sig_hdr = request.headers.get("X-Saweria-Signature")
+        calc = hmac.new(SAWERIA_WEBHOOK_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+        if not sig_hdr or not hmac.compare_digest(calc, sig_hdr):
+            return JSONResponse({"ok": False, "reason": "bad signature"}, status_code=403)
 
-    # Parse body aman (pydantic v1/v2)
+    # --- parse body JSON aman
     try:
-        data = SaweriaWebhookIn.model_validate_json(raw)  # v2
-    except Exception:
-        try:
-            data = SaweriaWebhookIn(**(json.loads(raw.decode() or "{}")))  # fallback
-        except Exception as e:
-            return {"ok": False, "reason": f"bad json: {e.__class__.__name__}"}
+        body = json.loads(raw.decode() or "{}")
+    except Exception as e:
+        return {"ok": False, "reason": f"bad json: {e.__class__.__name__}"}
 
-    if (data.status or "").lower() != "paid":
+    status = str(body.get("status") or "").lower()
+    if status != "paid":
         return {"ok": True, "ignored": True}
 
-    # Cari ID kandidat: invoice_id -> external_id -> INV:... dalam message
-    candidate_id = (data.invoice_id or "").strip()
-    if not candidate_id and data.external_id:
-        candidate_id = str(data.external_id).strip()
-    if not candidate_id and data.message:
-        m = _UUID_RE.search(data.message or "")
+    # --- cari kandidat invoice_id
+    candidate_id = (str(body.get("invoice_id") or "")).strip()
+    if not candidate_id:
+        ext = body.get("external_id")
+        if ext is not None:
+            candidate_id = str(ext).strip()
+
+    if not candidate_id:
+        msg = body.get("message") or ""
+        m = re.search(r"(?i)\bINV:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b", msg)
         if m:
             candidate_id = m.group(1)
 
     if not candidate_id:
-        # Tidak ada ID -> jangan tulis DB, cukup balas info
         return {"ok": False, "reason": "no invoice id in payload"}
 
-    # Tandai PAID & ambil invoice tanpa bikin 500
+    # --- tandai PAID & ambil invoice (tanpa 500)
     try:
         inv = payments.mark_paid(candidate_id)
     except Exception as e:
@@ -364,7 +367,7 @@ async def saweria_webhook(request: Request):
     if not inv:
         return {"ok": False, "reason": "invoice not found", "invoice_id": candidate_id}
 
-    # Kirim undangan
+    # --- kirim undangan
     try:
         groups = json.loads(inv.get("groups_json") or "[]")
     except Exception:
@@ -377,12 +380,10 @@ async def saweria_webhook(request: Request):
             storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-webhook)", None)
             sent.append(gid)
         except Exception as e:
-            # tetap catat error per grup
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
             failed.append({"group_id": gid, "error": str(e)})
 
     return {"ok": True, "invoice_id": inv["invoice_id"], "sent": sent, "failed": failed}
-
 
 
 # >>> ADD: endpoint manual trigger kirim undangan (untuk debug)
