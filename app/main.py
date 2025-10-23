@@ -341,10 +341,6 @@ def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
 @app.post("/api/saweria/webhook")
 async def saweria_webhook(request: Request):
     # Buat webhook sepenuhnya anti-crash & informatif
-    data = await request.json()
-    print("[SAWERIA WEBHOOK]", data)
-    return {"status": "ok"}
-
     try:
         raw = await request.body()
 
