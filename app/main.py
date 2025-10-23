@@ -78,6 +78,36 @@ storage.init_db()
 bot_app: Application = build_app()
 register_handlers(bot_app)
 
+# >>> ADD: helper kirim undangan (idempotent-ish)
+async def _send_invites_for_invoice(inv: dict) -> None:
+    """
+    Kirim undangan ke semua grup pada invoice.
+    Aman dipanggil berulang karena kita cek log yang sudah pernah terkirim.
+    """
+    try:
+        groups = json.loads(inv.get("groups_json") or "[]")
+    except Exception:
+        groups = []
+    if not groups:
+        return
+
+    logs = storage.list_invite_logs(inv["invoice_id"])
+    # anggap sudah terkirim jika ada invite_link atau string "(sent" pada kolom invite_link
+    already = {
+        l.get("group_id")
+        for l in logs
+        if l.get("invite_link") or "(sent" in (l.get("invite_link") or "")
+    }
+
+    for gid in groups:
+        if gid in already:
+            continue
+        try:
+            await send_invite_link(bot_app, inv["user_id"], gid)
+            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-status)", None)
+        except Exception as e:
+            storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
+
 # Serve Mini App statics
 app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
 
@@ -152,10 +182,23 @@ def get_config():
 _DATA_URL_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$")
 
 @app.get("/api/invoice/{invoice_id}/status")
-def invoice_status(invoice_id: str):
+async def invoice_status(invoice_id: str):
     st = payments.get_status(invoice_id)
     if not st:
         raise HTTPException(404, "Invoice not found")
+
+    # >>> ADD: fallback auto-kirim undangan saat status sudah PAID
+    try:
+        if (st.get("status") or "").upper() == "PAID":
+            logs = storage.list_invite_logs(invoice_id)
+            if not logs:
+                inv = payments.get_invoice(invoice_id)  # berisi user_id & groups_json
+                if inv:
+                    await _send_invites_for_invoice(inv)
+    except Exception as e:
+        # jangan gagalkan response status hanya karena fallback gagal
+        print("[invoice_status] auto-send invites failed:", e)
+
     # contoh balikan: {"status":"PENDING"|"PAID","paid_at":..., "has_qr": true|false}
     return st
 
@@ -199,7 +242,7 @@ async def qr_png(
     except Exception:
         inv_groups = []
     initials = [id_to_initial.get(str(g), "") for g in inv_groups]
-    # join with space (e.g., "M A S")
+    # join dengan spasi (mis. "M A S")
     message = " ".join([s.strip() for s in initials if s.strip()]) or f"INV:{invoice_id}"
 
 
@@ -281,6 +324,7 @@ async def saweria_webhook(request: Request):
     raw = await request.body()
     if not _verify_saweria_signature(request, raw):
         raise HTTPException(403, "Bad signature")
+    # Tetap pakai yang sudah berjalan di environment kamu:
     data = SaweriaWebhookIn.model_validate_json(raw)
     if data.status.lower() != "paid":
         return {"ok": True}
@@ -301,6 +345,18 @@ async def saweria_webhook(request: Request):
         except Exception as e:
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
     return {"ok": True}
+
+# >>> ADD: endpoint manual trigger kirim undangan (untuk debug)
+@app.post("/api/invoice/{invoice_id}/send-invites")
+async def manual_send_invites(invoice_id: str, secret: Optional[str] = Query(None)):
+    # lindungi pakai WEBHOOK_SECRET (Telegram webhook secret) biar tidak disalahgunakan
+    if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
+        raise HTTPException(403, "Forbidden")
+    inv = payments.get_invoice(invoice_id)  # ambil dari layer payments biar konsisten
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    await _send_invites_for_invoice(inv)
+    return {"ok": True, "invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
 
 # ------------- HEALTH / DEBUG -------------
 @app.get("/health")
