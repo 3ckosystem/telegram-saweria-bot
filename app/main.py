@@ -323,23 +323,24 @@ def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
 @app.post("/api/saweria/webhook")
 async def saweria_webhook(request: Request):
     raw = await request.body()
+
+    # Verifikasi signature -> jangan 500
     if not _verify_saweria_signature(request, raw):
-        # jangan 500, kasih alasan
         return JSONResponse({"ok": False, "reason": "bad signature"}, status_code=403)
 
-    # parse body tahan banting
+    # Parse body aman (pydantic v1/v2)
     try:
-        data = SaweriaWebhookIn.model_validate_json(raw)  # pydantic v2
+        data = SaweriaWebhookIn.model_validate_json(raw)  # v2
     except Exception:
         try:
-            data = SaweriaWebhookIn(**(json.loads(raw.decode() or "{}")))
+            data = SaweriaWebhookIn(**(json.loads(raw.decode() or "{}")))  # fallback
         except Exception as e:
             return {"ok": False, "reason": f"bad json: {e.__class__.__name__}"}
 
     if (data.status or "").lower() != "paid":
         return {"ok": True, "ignored": True}
 
-    # cari kandidat invoice id
+    # Cari ID kandidat: invoice_id -> external_id -> INV:... dalam message
     candidate_id = (data.invoice_id or "").strip()
     if not candidate_id and data.external_id:
         candidate_id = str(data.external_id).strip()
@@ -349,20 +350,21 @@ async def saweria_webhook(request: Request):
             candidate_id = m.group(1)
 
     if not candidate_id:
+        # Tidak ada ID -> jangan tulis DB, cukup balas info
         return {"ok": False, "reason": "no invoice id in payload"}
 
-    # tandai paid + ambil invoice tanpa memicu 500
+    # Tandai PAID & ambil invoice tanpa bikin 500
     try:
         inv = payments.mark_paid(candidate_id)
     except Exception as e:
-        return {"ok": False, "reason": f"mark_paid error: {e.__class__.__name__}"}
+        return {"ok": False, "reason": f"mark_paid error: {e.__class__.__name__}", "invoice_id": candidate_id}
 
     if not inv:
         inv = payments.get_invoice(candidate_id)
     if not inv:
         return {"ok": False, "reason": "invoice not found", "invoice_id": candidate_id}
 
-    # kirim undangan
+    # Kirim undangan
     try:
         groups = json.loads(inv.get("groups_json") or "[]")
     except Exception:
@@ -375,6 +377,7 @@ async def saweria_webhook(request: Request):
             storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-webhook)", None)
             sent.append(gid)
         except Exception as e:
+            # tetap catat error per grup
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
             failed.append({"group_id": gid, "error": str(e)})
 
