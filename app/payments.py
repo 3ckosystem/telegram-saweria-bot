@@ -1,75 +1,122 @@
-
-# app/payments.py — SAFE WRAPPER (no crash on import)
+# app/payments.py
 # ------------------------------------------------------------
-# Fungsi publik:
-#   - create_invoice(user_id, groups, amount)  -> dict invoice
-#   - get_invoice(invoice_id)                  -> dict|None
-#   - get_status(invoice_id)                   -> dict|None
-#   - mark_paid(invoice_id)                    -> dict|None
-#   - list_invoices(limit=50)                  -> list[dict]
-#   - (bg) _bg_generate_qr(invoice_id, amount) -> None
-# Catatan: tidak me-raise error saat import meski storage beda nama.
+# Lapisan kecil di atas storage untuk:
+# - membuat invoice
+# - membaca status
+# - menandai PAID
+# - (opsional) generate QR HD di background dan cache ke DB
 # ------------------------------------------------------------
 
 from __future__ import annotations
-import asyncio, base64
+
+import asyncio
+import base64
+import json
 from typing import Any, Dict, List, Optional
 
 from . import storage
 from .scraper import fetch_gopay_qr_hd_png
 
-# ---------- util pemanggil aman ----------
-def _call_storage(names: list[str], *args, **kwargs):
-    """
-    Coba panggil storage.<name> dari daftar 'names' secara berurutan.
-    Tidak me-raise saat import; hanya raise saat dipanggil dan tak satupun ditemukan.
-    """
-    for n in names:
-        fn = getattr(storage, n, None)
-        if callable(fn):
-            return fn(*args, **kwargs)
-    raise RuntimeError(f"Storage function not found. Tried: {', '.join(names)}")
 
-# ---------- API ----------
-async def create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[str, Any]:
-    inv = _call_storage(
-        ["create_invoice", "new_invoice", "add_invoice"],
-        user_id, groups, amount
-    )
-    # prewarm QR (non-blocking)
-    try:
-        asyncio.create_task(_bg_generate_qr(inv["invoice_id"], amount))
-    except Exception:
-        pass
+# ---------- util: panggil fungsi storage yang mungkin beda nama ----------
+def _storage_create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[str, Any]:
+    """
+    Coba beberapa kemungkinan nama fungsi di storage agar fleksibel.
+    Return: dict invoice (harus mengandung invoice_id / amount / groups_json / status, dsb.)
+    """
+    if hasattr(storage, "create_invoice"):
+        return storage.create_invoice(user_id, groups, amount)  # type: ignore[attr-defined]
+    if hasattr(storage, "add_invoice"):
+        return storage.add_invoice(user_id, groups, amount)  # type: ignore[attr-defined]
+    # fallback terakhir: bikin lewat API yang umum kalau ada
+    raise RuntimeError("storage.create_invoice / add_invoice tidak ditemukan")
+
+
+def _storage_get_invoice(invoice_id: str) -> Optional[Dict[str, Any]]:
+    if hasattr(storage, "get_invoice"):
+        return storage.get_invoice(invoice_id)  # type: ignore[attr-defined]
+    if hasattr(storage, "find_invoice"):
+        return storage.find_invoice(invoice_id)  # type: ignore[attr-defined]
+    return None
+
+
+def _storage_update_status(invoice_id: str, status: str) -> Optional[Dict[str, Any]]:
+    if hasattr(storage, "update_invoice_status"):
+        return storage.update_invoice_status(invoice_id, status)  # type: ignore[attr-defined]
+    if hasattr(storage, "mark_paid") and status.upper() == "PAID":
+        return storage.mark_paid(invoice_id)  # type: ignore[attr-defined]
+    # kalau tidak ada API khusus, biarkan caller yang handle None
+    return None
+
+
+def _storage_update_qr_payload(invoice_id: str, data_url: str) -> None:
+    if hasattr(storage, "update_qris_payload"):
+        storage.update_qris_payload(invoice_id, data_url)  # type: ignore[attr-defined]
+        return
+    if hasattr(storage, "save_qr_payload"):
+        storage.save_qr_payload(invoice_id, data_url)  # type: ignore[attr-defined]
+        return
+    # jika tidak ada, diamkan saja.
+
+
+def _storage_list_invoices(limit: int = 20) -> List[Dict[str, Any]]:
+    if hasattr(storage, "list_invoices"):
+        return storage.list_invoices(limit)  # type: ignore[attr-defined]
+    return []
+
+
+# ---------- API yang dipakai main.py ----------
+async def create_invoice(user_id: int, groups: List[str], amount: int, message: str = "") -> Dict[str, Any]:
+    inv = _storage_create_invoice(user_id, groups, amount)
+    # Prewarm QR HD, konsisten pakai INV:<invoice_id>
+    asyncio.create_task(_bg_generate_qr(inv["invoice_id"], amount))
     return inv
 
+
 def get_invoice(invoice_id: str) -> Optional[Dict[str, Any]]:
-    return _call_storage(["get_invoice", "read_invoice", "fetch_invoice"], invoice_id)
+    return _storage_get_invoice(invoice_id)
+
 
 def get_status(invoice_id: str) -> Optional[Dict[str, Any]]:
-    return _call_storage(["get_status", "read_status", "status_of"], invoice_id)
+    inv = _storage_get_invoice(invoice_id)
+    if not inv:
+        return None
+
+    # Normalisasi field agar stabil untuk API /api/invoice/{id}/status
+    status = (inv.get("status") or "PENDING").upper()
+    payload = inv.get("qris_payload") or inv.get("qr_payload")
+
+    return {
+        "invoice_id": inv.get("invoice_id") or invoice_id,
+        "status": status,
+        "paid_at": inv.get("paid_at"),
+        "has_qr": bool(payload),
+    }
+
 
 def mark_paid(invoice_id: str) -> Optional[Dict[str, Any]]:
-    _call_storage(["mark_paid", "set_paid", "update_status_paid"], invoice_id)
-    return get_invoice(invoice_id)
+    updated = _storage_update_status(invoice_id, "PAID")
+    # kalau storage tidak mengembalikan row terbaru, coba ambil lagi
+    return updated or _storage_get_invoice(invoice_id)
 
-def list_invoices(limit: int = 50) -> List[Dict[str, Any]]:
-    try:
-        return _call_storage(["list_invoices", "all_invoices", "fetch_invoices"], limit)
-    except TypeError:
-        return _call_storage(["list_invoices", "all_invoices", "fetch_invoices"])
 
-# ---------- background prewarm ----------
+def list_invoices(limit: int = 20) -> List[Dict[str, Any]]:
+    return _storage_list_invoices(limit)
+
+
+# ---------- background QR prewarm ----------
 async def _bg_generate_qr(invoice_id: str, amount: int) -> None:
+    """
+    Ambil QR HD via scraper dan simpan sebagai data URL ke DB.
+    Supaya /api/qr/{id} bisa cepat melayani request berikutnya.
+    """
     try:
         message = f"INV:{invoice_id}"
-        png = await fetch_gopay_qr_hd_png(int(amount), message)
+        png = await fetch_gopay_qr_hd_png(amount, message)
         if not png:
             return
         b64 = base64.b64encode(png).decode()
-        _call_storage(
-            ["update_qris_payload", "update_qr_payload", "cache_qr_payload"],
-            invoice_id, f"data:image/png;base64,{b64}"
-        )
+        _storage_update_qr_payload(invoice_id, f"data:image/png;base64,{b64}")
     except Exception:
+        # diamkan; logging sudah cukup dari layer scraper
         return
