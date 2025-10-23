@@ -1,4 +1,4 @@
-# app/scraper.py (FINAL) — pastikan Nama/Email/Pesan terisi + pilih GoPay + ambil QR HD
+# app/scraper.py (FINAL, robust fill Name/Email/Message → INV:<uuid>)
 from __future__ import annotations
 import os, re, uuid, base64, asyncio
 from typing import Optional
@@ -18,7 +18,7 @@ _BROWSER = None
 
 _UUID_RE = re.compile(r"(?i)\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b")
 
-# ----------------- browser ctx -----------------
+# ---------------- browser ----------------
 async def _get_browser():
     global _PLAY, _BROWSER
     if _PLAY is None:
@@ -28,7 +28,7 @@ async def _get_browser():
             headless=True,
             args=[
                 "--no-sandbox","--disable-gpu","--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled"
+                "--disable-blink-features=AutomationControlled",
             ],
         )
     return _BROWSER
@@ -42,90 +42,65 @@ async def _new_context():
         device_scale_factor=2, locale="id-ID", timezone_id="Asia/Jakarta",
     )
 
-# ----------------- helpers -----------------
-async def _maybe_dispatch(page: Page, handle):
-    if not FORCE_DISPATCH or handle is None:
-        return
-    try:
-        await page.evaluate(
-            "(e)=>{ if(!e) return;"
-            " const ev=(t)=>e.dispatchEvent(new Event(t,{bubbles:true}));"
-            " ev('input'); ev('change'); e.blur && e.blur(); }",
-            handle,
-        )
-    except Exception:
-        pass
-
+# --------------- utils -------------------
 async def _native_set_and_dispatch(page: Page, handle, value: str):
-    """Set via native setter (untuk React-controlled input) + event input/change."""
     try:
         await page.evaluate(
             """(e, val) => {
-                if(!e) return;
-                const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
-                        || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value');
-                if (d && d.set) d.set.call(e, val); else e.value = val;
-                e.dispatchEvent(new Event('input', {bubbles:true}));
-                e.dispatchEvent(new Event('change', {bubbles:true}));
-                e.blur && e.blur();
+              if (!e) return;
+              const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')
+                         || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value');
+              if (desc && desc.set) desc.set.call(e, val); else e.value = val;
+              e.dispatchEvent(new Event('input',  {bubbles:true}));
+              e.dispatchEvent(new Event('change', {bubbles:true}));
+              e.blur && e.blur();
             }""",
             handle, value
         )
     except Exception:
         pass
 
-async def _set_input_and_commit(locator, value: str):
-    # kombinasi: clear + type + native setter + events
+async def _maybe_dispatch(page: Page, handle):
+    if not FORCE_DISPATCH or handle is None:
+        return
     try:
-        await locator.click()
-        try: await locator.fill("")  # cepat
-        except Exception:
-            try:
-                await locator.press("Control+A")
-            except Exception:
-                await locator.press("Meta+A")
-            await locator.press("Backspace")
-        await locator.type(str(value), delay=25)
-        await locator.dispatch_event("input")
-        await locator.dispatch_event("change")
-        await locator.blur()
+        await page.evaluate(
+            "(e)=>{ const ev=t=>e.dispatchEvent(new Event(t,{bubbles:true})); ev('input'); ev('change'); e.blur&&e.blur(); }",
+            handle
+        )
     except Exception:
         pass
 
 async def _wait_total_updated(page: Page, timeout_ms: int) -> bool:
     step = 250
-    for _ in range(max(1, timeout_ms // step)):
+    for _ in range(max(1, timeout_ms//step)):
         try:
-            ok = await page.evaluate(
-                """
-                () => {
-                  const nodes = Array.from(document.querySelectorAll('*'));
-                  const target = nodes.find(n => /Total\\s*:\\s*Rp/i.test(n.textContent||''));
-                  if (!target) return false;
-                  const txt = (target.textContent||'').replace(/\\s+/g,' ');
-                  const m = txt.match(/Total\\s*:\\s*Rp\\s*([\\d.]+)/i);
-                  if (!m) return false;
-                  const val = parseInt(m[1].replace(/[.]/g,''));
-                  return Number.isFinite(val) && val > 0;
-                }
-                """
-            )
-            if ok:
-                return True
+            ok = await page.evaluate("""
+              () => {
+                const nodes = Array.from(document.querySelectorAll('*'));
+                const target = nodes.find(n => /Total\\s*:\\s*Rp/i.test(n.textContent||''));
+                if (!target) return false;
+                const txt = (target.textContent||'').replace(/\\s+/g,' ');
+                const m = txt.match(/Total\\s*:\\s*Rp\\s*([\\d.]+)/i);
+                if (!m) return false;
+                const val = parseInt(m[1].replace(/[.]/g,''));
+                return Number.isFinite(val) && val > 0;
+              }
+            """)
+            if ok: return True
         except Exception:
             pass
-        await asyncio.sleep(step / 1000)
+        await asyncio.sleep(step/1000)
     return False
 
 async def _select_gopay_and_wait_total(page: Page, amount: int):
-    sels = [
+    for sel in [
         '[data-testid="gopay-button"]',
         'button[data-testid="gopay-button"]',
         'button:has-text("GoPay")',
         '[role="radio"]:has-text("GoPay")',
         '[data-testid*="gopay"]',
-    ]
-    for sel in sels:
+    ]:
         try:
             el = await page.wait_for_selector(sel, timeout=2500)
             await el.scroll_into_view_if_needed()
@@ -136,7 +111,7 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
     await page.wait_for_timeout(200)
     if await _wait_total_updated(page, WAIT_TOTAL_MS):
         return
-    # recovery: retype amount
+    # recovery: ketik ulang nominal
     for sel in [
         'input[placeholder*="Ketik jumlah" i]',
         'input[aria-label*="Nominal" i]',
@@ -147,7 +122,8 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
         try:
             loc = page.locator(sel)
             if await loc.count() > 0:
-                await _set_input_and_commit(loc.first(), str(int(amount)))
+                el = loc.first()
+                await _native_set_and_dispatch(page, el, str(int(amount)))
                 await page.wait_for_timeout(350)
                 if await _wait_total_updated(page, 3000):
                     return
@@ -155,8 +131,8 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
         except Exception:
             pass
 
-# ----------------- name/email/message fill (super-robust) -----------------
-async def _ensure_name_filled(page: Page, value: str = "Budi") -> bool:
+# --------------- strong fillers ---------------
+async def _ensure_name(page: Page, value="Budi") -> bool:
     sels = [
         'input[name="name"]',
         'input[placeholder*="Dari" i]',
@@ -165,63 +141,72 @@ async def _ensure_name_filled(page: Page, value: str = "Budi") -> bool:
         'input[required][type="text"]',
         'input[type="text"]',
     ]
-    # 1) coba selector umum
     for sel in sels:
         try:
             el = await page.wait_for_selector(sel, timeout=1500)
             await el.scroll_into_view_if_needed()
-            await _set_input_and_commit(el, value)
-            await _maybe_dispatch(page, el)
-            ok = await el.evaluate("e => !!(e.value && e.value.trim().length)")
-            if ok:
-                return True
-            # 2) paksa via native setter
             await _native_set_and_dispatch(page, el, value)
             ok = await el.evaluate("e => !!(e.value && e.value.trim().length)")
-            if ok:
-                return True
+            if ok: return True
         except Exception:
             pass
-
-    # 3) heuristik: cari input terdekat label 'Dari'
-    try:
-        found = await page.evaluateHandle("""
-        () => {
-          const labs = Array.from(document.querySelectorAll('label'));
-          const lab = labs.find(l => /\\bDari\\b/i.test(l.textContent||''));
-          if (!lab) return null;
-          const next = lab.nextElementSibling;
-          if (next && next.tagName==='INPUT') return next;
-          return lab.parentElement && lab.parentElement.querySelector('input');
-        }""")
-        if found:
-            await _native_set_and_dispatch(page, found, value)
-            ok = await page.evaluate("(e)=>!!(e.value && e.value.trim().length)", found)
-            if ok:
-                return True
-    except Exception:
-        pass
-
-    # 4) brute force: isi semua input text yang kosong pertama
+    # brute force: isi input text kosong pertama
     try:
         inputs = page.locator('input[type="text"]')
         n = await inputs.count()
         for i in range(min(n, 4)):
             el = inputs.nth(i)
-            v = await el.evaluate("e => e.value || ''")
+            v = await el.evaluate("e => e.value||''")
             if not v:
                 await _native_set_and_dispatch(page, el, value)
                 ok = await el.evaluate("e => !!(e.value && e.value.trim().length)")
-                if ok:
-                    return True
+                if ok: return True
     except Exception:
         pass
     return False
 
-# ----------------- fill form -----------------
+async def _ensure_email(page: Page, value=None) -> bool:
+    if value is None:
+        value = f"donor+{uuid.uuid4().hex[:8]}@example.com"
+    for sel in ['input[type="email"]','input[name="email"]','input[placeholder*="email" i]']:
+        try:
+            el = await page.wait_for_selector(sel, timeout=1800)
+            await el.scroll_into_view_if_needed()
+            await _native_set_and_dispatch(page, el, value)
+            ok = await el.evaluate("e=>!!e.value && /.+@.+\\..+/.test(e.value)")
+            if ok: return True
+        except Exception:
+            pass
+    return False
+
+async def _ensure_message(page: Page, raw_msg: str) -> bool:
+    # normalisasi ke INV:<uuid>
+    norm = (raw_msg or "").strip()
+    if not norm.upper().startswith("INV:"):
+        m = _UUID_RE.search(norm)
+        if m: norm = f"INV:{m.group(1)}"
+    for sel in [
+        'input[name="message"]',
+        'input[data-testid="message-input"]',
+        '#message',
+        'input[placeholder*="Selamat pagi" i]',
+        'input[placeholder*="pesan" i]',
+        'textarea[name="message"]',
+        'textarea',
+    ]:
+        try:
+            el = await page.wait_for_selector(sel, timeout=1800)
+            await el.scroll_into_view_if_needed()
+            await _native_set_and_dispatch(page, el, norm)
+            ok = await el.evaluate("e => !!(e.value && e.value.trim().length)")
+            if ok: return True
+        except Exception:
+            pass
+    return False
+
+# --------------- fill form -------------------
 async def _fill_without_submit(page: Page, amount: int, message: str, method: str):
-    # amount
-    amount_handle = None
+    # Amount
     for sel in [
         'input[placeholder*="Ketik jumlah" i]',
         'input[aria-label*="Nominal" i]',
@@ -232,46 +217,19 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
         try:
             el = await page.wait_for_selector(sel, timeout=3000)
             await el.scroll_into_view_if_needed()
-            await el.click()
-            await _set_input_and_commit(el, str(int(amount)))
-            amount_handle = el
+            await _native_set_and_dispatch(page, el, str(int(amount)))
             break
         except Exception:
             pass
-    await _maybe_dispatch(page, amount_handle)
-    await page.wait_for_timeout(160)
+    await page.wait_for_timeout(120)
 
-    # NAME — pastikan benar-benar terisi
-    filled = await _ensure_name_filled(page, "Budi")
-    if not filled:
-        # satu tembakan terakhir: cari input apa saja yang required dan kosong
-        try:
-            el = await page.wait_for_selector('input[required]', timeout=800)
-            await _native_set_and_dispatch(page, el, "Budi")
-        except Exception:
-            pass
+    # Name, Email, Message — paksa terisi
+    await _ensure_name(page, "Budi")
+    await _ensure_email(page)
+    await _ensure_message(page, message)
+    await page.wait_for_timeout(150)
 
-    # email
-    try:
-        el = await page.wait_for_selector('input[type="email"]', timeout=1800)
-        await _native_set_and_dispatch(page, el, f"donor+{uuid.uuid4().hex[:8]}@example.com")
-    except Exception:
-        pass
-
-    # message normalization -> ensure INV:<uuid>
-    norm = (message or "").strip()
-    if not norm.upper().startswith("INV:"):
-        m = _UUID_RE.search(norm)
-        if m:
-            norm = f"INV:{m.group(1)}"
-    try:
-        el = await page.wait_for_selector('input[name="message"], input[data-testid="message-input"], #message, textarea[name="message"], textarea', timeout=1800)
-        await el.scroll_into_view_if_needed()
-        await _native_set_and_dispatch(page, el, norm)
-    except Exception:
-        pass
-
-    # centang checkbox wajib
+    # Centang checkbox wajib
     for text in ["17 tahun", "tujuh belas tahun", "menyetujui", "ketentuan", "kebijakan privasi"]:
         try:
             node = page.get_by_text(re.compile(text, re.I))
@@ -280,7 +238,6 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
         except Exception:
             pass
     try:
-        # jaga-jaga: centang langsung input[type=checkbox]
         boxes = page.locator('input[type="checkbox"]')
         n = await boxes.count()
         for i in range(min(n, 3)):
@@ -290,12 +247,12 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
     except Exception:
         pass
 
-    # pilih GoPay
+    # Pilih GoPay + pastikan Total ter-update
     if (method or "gopay").lower() == "gopay":
         await _select_gopay_and_wait_total(page, amount)
-    await page.wait_for_timeout(280)
+    await page.wait_for_timeout(250)
 
-# ----------------- donate & checkout -----------------
+# --------------- donate & capture --------------
 async def _click_donate_and_get_checkout_page(page: Page, context):
     new_page_task = context.wait_for_event("page")
     clicked = False
@@ -314,6 +271,7 @@ async def _click_donate_and_get_checkout_page(page: Page, context):
             pass
     if not clicked:
         raise RuntimeError("Tombol 'Kirim Dukungan' tidak ditemukan")
+
     try:
         target_page = await new_page_task
         await target_page.wait_for_load_state("domcontentloaded")
@@ -328,42 +286,35 @@ async def _click_donate_and_get_checkout_page(page: Page, context):
         pass
     for fr in page.frames:
         u = (fr.url or "").lower()
-        if any(k in u for k in ["gopay", "qris", "xendit", "midtrans", "snap", "checkout", "pay"]):
+        if any(k in u for k in ["gopay","qris","xendit","midtrans","snap","checkout","pay"]):
             return {"page": None, "frame": fr}
     return {"page": page, "frame": None}
 
 async def _wait_qr_ready(node: Page | Frame, timeout_ms: int):
     sels = [
-        'img[alt*="QR" i]',
-        'img[src^="data:image"]',
-        'img[src*="qris" i]',
-        'img.qr-image',
-        'img.qr-image--with-wrapper',
-        '[data-testid="qrcode"] img',
-        '[class*="qrcode" i] img',
-        "canvas",
+        'img[alt*="QR" i]','img[src^="data:image"]','img[src*="qris" i]',
+        'img.qr-image','img.qr-image--with-wrapper','[data-testid="qrcode"] img',
+        '[class*="qrcode" i] img','canvas'
     ]
     step = 250
-    for _ in range(max(1, timeout_ms // step)):
+    for _ in range(max(1, timeout_ms//step)):
         for sel in sels:
             try:
                 loc = node.locator(sel)
-                if await loc.count() > 0:
+                if await loc.count()>0:
                     box = await loc.first().bounding_box()
-                    if box and box["width"] > 80 and box["height"] > 80:
+                    if box and box["width"]>80 and box["height"]>80:
                         return loc.first()
             except Exception:
                 pass
-        await asyncio.sleep(step / 1000)
+        await asyncio.sleep(step/1000)
     return None
 
-# ----------------- ENTRYPOINT -----------------
+# --------------- entrypoint -------------------
 async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
-    if not PROFILE_URL:
-        return None
-    for attempt in range(1, MAX_RETRY + 1):
-        context = await _new_context()
-        page = await context.new_page()
+    if not PROFILE_URL: return None
+    for attempt in range(1, MAX_RETRY+1):
+        context = await _new_context(); page = await context.new_page()
         try:
             await page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=20000)
             await page.wait_for_load_state("networkidle", timeout=8000)
@@ -375,47 +326,36 @@ async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
 
             qr = await _wait_qr_ready(node, WAIT_QR_MS)
             if not qr:
-                # fallback: screenshot halaman/panel
-                png = await (node.screenshot(full_page=True))
-                await context.close()
-                return png
+                png = await node.screenshot(full_page=True)
+                await context.close(); return png
 
             tag = await qr.evaluate("(el)=>el.tagName.toLowerCase()")
             if tag == "img":
                 src = await qr.evaluate("(img)=>img.currentSrc || img.src || ''")
                 if src.startswith("data:image/"):
-                    header, b64 = src.split(",", 1)
+                    header,b64 = src.split(",",1)
                     data = base64.b64decode(b64)
-                    await context.close()
-                    return data
-                base_url = node.url if hasattr(node, "url") else page.url
+                    await context.close(); return data
+                base_url = node.url if hasattr(node,"url") else page.url
                 abs_url = urljoin(base_url, src)
                 r = await context.request.get(abs_url, headers={"Referer": base_url}, timeout=15000)
                 if r.ok:
                     data = await r.body()
-                    await context.close()
-                    return data
-                # fallback: screenshot elemen img
+                    await context.close(); return data
                 png = await qr.screenshot()
-                await context.close()
-                return png
+                await context.close(); return png
             else:
-                # canvas / elemen lain
                 png = await qr.screenshot()
-                await context.close()
-                return png
+                await context.close(); return png
 
         except Exception:
-            try:
-                await context.close()
-            except Exception:
-                pass
-            if attempt >= MAX_RETRY:
-                return None
-            await asyncio.sleep(0.6 * attempt)
+            try: await context.close()
+            except Exception: pass
+            if attempt>=MAX_RETRY: return None
+            await asyncio.sleep(0.6*attempt)
     return None
 
-# (opsional) debug stubs
+# (stubs untuk endpoint debug)
 async def debug_snapshot(): return None
 async def debug_fill_snapshot(amount:int, message:str, method:str="gopay"): return None
 async def fetch_gopay_checkout_png(amount:int, message:str): return None
