@@ -16,19 +16,25 @@ from .bot import build_app, register_handlers, send_invite_link
 from . import storage
 
 # ===================== ENV =====================
-BOT_TOKEN      = os.environ["BOT_TOKEN"]
-BASE_URL       = os.environ["BASE_URL"].strip()
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
-ENV            = os.getenv("ENV", "dev")
-DEFAULT_PRICE  = int(os.getenv("DEFAULT_PRICE", "25000"))
+BOT_TOKEN       = os.environ["BOT_TOKEN"]
+BASE_URL        = os.environ["BASE_URL"].strip()
+WEBHOOK_SECRET  = os.environ.get("WEBHOOK_SECRET", "")
+ENV             = os.getenv("ENV", "dev")
+
+# >>> HARGA GLOBAL dari PRICE_IDR (fallback 25000)
+PRICE_IDR       = int(os.getenv("PRICE_IDR", "25000"))
+DEFAULT_PRICE   = PRICE_IDR
 
 # ==== GROUPS ====
 GROUPS_ENV = (os.environ.get("GROUP_IDS_JSON") or "").strip()
 
 def parse_groups(env_val: str) -> List[Dict[str, Any]]:
     """
-    Terima berbagai format dan distandarkan:
-    → {id,name,title,label,initial,price}
+    Normalisasi berbagai format GROUP_IDS_JSON.
+    Menambahkan field:
+      - price (int)    → dari item.price / item.price_idr / PRICE_IDR
+      - price_idr (int) alias price
+      - title/label untuk kemudahan FE
     """
     groups: List[Dict[str, Any]] = []
     if not env_val:
@@ -38,17 +44,24 @@ def parse_groups(env_val: str) -> List[Dict[str, Any]]:
     except Exception:
         data = env_val
 
-    def _push(gid: str, name: Optional[str] = None, initial: Optional[str] = None):
+    def _build(
+        gid: str,
+        name: Optional[str] = None,
+        initial: Optional[str] = None,
+        price: Optional[int] = None,
+    ):
         gid = str(gid).strip()
         if not gid:
             return
         nm = (name or gid).strip()
+        p = int(price if (price is not None and str(price).isdigit()) else DEFAULT_PRICE)
         obj: Dict[str, Any] = {
             "id": gid,
             "name": nm,
             "title": nm,
             "label": nm,
-            "price": DEFAULT_PRICE,
+            "price": p,
+            "price_idr": p,
         }
         if initial:
             obj["initial"] = str(initial).strip()
@@ -57,22 +70,27 @@ def parse_groups(env_val: str) -> List[Dict[str, Any]]:
     if isinstance(data, dict):
         for k, v in data.items():
             if isinstance(v, dict):
-                _push(v.get("id") or k, v.get("name") or v.get("label") or v.get("text") or str(k), v.get("initial") or v.get("abbr"))
+                _build(
+                    v.get("id") or k,
+                    v.get("name") or v.get("label") or v.get("text") or str(k),
+                    v.get("initial") or v.get("abbr"),
+                    v.get("price") or v.get("price_idr"),
+                )
             else:
-                _push(k, str(v))
+                _build(k, str(v))
     elif isinstance(data, list):
         for it in data:
             if isinstance(it, dict):
-                _push(
+                _build(
                     it.get("id") or it.get("group_id") or it.get("value"),
                     it.get("name") or it.get("label") or it.get("text"),
                     it.get("initial") or it.get("abbr"),
+                    it.get("price") or it.get("price_idr"),
                 )
             else:
-                _push(str(it))
+                _build(str(it))
     else:
-        s = str(data).strip()
-        _push(s)
+        _build(str(data).strip())
 
     return groups
 
@@ -87,7 +105,8 @@ if not GROUPS:
             "name": "Default Group",
             "title": "Default Group",
             "label": "Default Group",
-            "price": DEFAULT_PRICE
+            "price": DEFAULT_PRICE,
+            "price_idr": DEFAULT_PRICE,
         }]
 
 # ===================== FastAPI =====================
@@ -158,6 +177,9 @@ def _groups_payload():
         "options": GROUPS,
         "env": ENV,
         "baseUrl": BASE_URL,
+        # expose harga global juga
+        "price": PRICE_IDR,
+        "price_idr": PRICE_IDR,
         "defaultPrice": DEFAULT_PRICE,
     }
 
@@ -204,7 +226,7 @@ register_handlers(bot_app)
 async def on_start():
     print("[startup] init DB…")
     storage.init_db()
-    print(f"[startup] GROUPS loaded: {len(GROUPS)} item(s)")
+    print(f"[startup] GROUPS loaded: {len(GROUPS)} item(s); PRICE_IDR={PRICE_IDR}")
 
     print("[startup] launching bot app…")
     await bot_app.initialize()
