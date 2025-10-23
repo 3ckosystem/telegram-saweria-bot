@@ -11,10 +11,14 @@
 #
 # ENV:
 #   SAWERIA_USERNAME  (contoh: "payments")
+#   (opsional) Tuning waktu:
+#     SCRAPER_WAIT_TOTAL_MS (default 6000)
+#     SCRAPER_WAIT_QR_MS    (default 12000)
+#     SCRAPER_MAX_RETRY     (default 3)
 # ------------------------------------------------------------
 
 from __future__ import annotations
-import os, re, uuid, base64
+import os, re, uuid, base64, asyncio
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -22,6 +26,11 @@ from playwright.async_api import async_playwright, Page, Frame, Error as PWError
 
 SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "").strip()
 PROFILE_URL = f"https://saweria.co/{SAWERIA_USERNAME}" if SAWERIA_USERNAME else None
+
+# Tuning via ENV
+WAIT_TOTAL_MS = int(os.getenv("SCRAPER_WAIT_TOTAL_MS", "6000"))
+WAIT_QR_MS    = int(os.getenv("SCRAPER_WAIT_QR_MS", "12000"))
+MAX_RETRY     = int(os.getenv("SCRAPER_MAX_RETRY", "3"))
 
 # Paksa event input/change supaya binding reaktif di halaman terpicu
 FORCE_DISPATCH = True
@@ -115,9 +124,101 @@ async def _maybe_dispatch(page: Page, handle):
         pass
 
 
+# ---------- helpers tambahan (baru/ditingkatkan) ----------
+
+async def _set_input_and_commit(locator, value: str):
+    """Isi input secara 'ramah React' + trigger event."""
+    try:
+        await locator.fill("")
+    except Exception:
+        try:
+            await locator.click()
+            # clear manual
+            try:
+                await locator.press("Control+A")
+            except Exception:
+                await locator.press("Meta+A")
+            await locator.press("Backspace")
+        except Exception:
+            pass
+    await locator.type(value, delay=35)
+    try:
+        await locator.dispatch_event("input")
+        await locator.dispatch_event("change")
+        await locator.blur()
+    except Exception:
+        pass
+
+
+async def _wait_total_updated(page: Page, timeout_ms: int) -> bool:
+    """
+    Menunggu sampai teks 'Total: Rp...' muncul dan bernilai > 0.
+    Menggunakan scan DOM fleksibel agar tahan gonta-ganti UI.
+    """
+    step = 250
+    rounds = max(1, timeout_ms // step)
+    for _ in range(rounds):
+        try:
+            ok = await page.evaluate(
+                """
+                () => {
+                  const nodes = Array.from(document.querySelectorAll('*'));
+                  // cari node yang mengandung kata 'Total: Rp'
+                  const target = nodes.find(n => /Total\\s*:\\s*Rp/i.test(n.textContent||''));
+                  if (!target) return false;
+                  const txt = (target.textContent||'').replace(/\\s+/g,' ');
+                  const m = txt.match(/Total\\s*:\\s*Rp\\s*([\\d.]+)/i);
+                  if (!m) return false;
+                  const val = parseInt(m[1].replace(/[.]/g,''));
+                  return Number.isFinite(val) && val > 0;
+                }
+                """
+            )
+            if ok:
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(step / 1000)
+    return False
+
+
+async def _wait_qr_ready(node: Page | Frame, timeout_ms: int):
+    """Tunggu elemen QR (img/canvas/data-url/lazy) muncul dengan ukuran memadai."""
+    sels = [
+        'img[alt*="QR" i]',
+        'img[src^="data:image"]',
+        'img[src*="qris" i]',
+        'img.qr-image',
+        'img.qr-image--with-wrapper',
+        '[data-testid="qrcode"] img',
+        '[class*="qrcode" i] img',
+        "canvas",
+    ]
+    step = 250
+    rounds = max(1, timeout_ms // step)
+    for _ in range(rounds):
+        for sel in sels:
+            try:
+                loc = node.locator(sel)
+                if await loc.count() > 0:
+                    box = await loc.first().bounding_box()
+                    if box and box["width"] > 80 and box["height"] > 80:
+                        return loc.first()
+            except Exception:
+                pass
+        # pancing lazy-load
+        try:
+            if hasattr(node, "mouse"):
+                await node.mouse.wheel(0, 400)  # type: ignore
+        except Exception:
+            pass
+        await asyncio.sleep(step / 1000)
+    return None
+
+
 # ---------- helper: pilih GoPay & tunggu Total > 0 ----------
 async def _select_gopay_and_wait_total(page: Page, amount: int):
-    """Klik GoPay dan tunggu 'Total' berubah > 0 (metode ter-apply)."""
+    """Klik GoPay dan tahan sampai 'Total' > 0, dengan recovery aktif jika gagal."""
     gopay_selectors = [
         '[data-testid="gopay-button"]',
         'button[data-testid="gopay-button"]',
@@ -125,6 +226,13 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
         '[role="radio"]:has-text("GoPay")',
         '[data-testid*="gopay"]',
     ]
+    alt_method_selectors = [  # untuk toggle memicu re-calc
+        'button:has-text("OVO")',
+        'button:has-text("QRIS")',
+        '[data-testid*="qris"]',
+    ]
+
+    # 1) klik GoPay (pertama)
     clicked = False
     for sel in gopay_selectors:
         try:
@@ -136,44 +244,79 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
             break
         except Exception:
             pass
-
     if not clicked:
         print("[scraper] WARN: GoPay button not found")
 
-    # pancing re-render ringan
-    try:
-        await page.keyboard.press("Tab")
-    except Exception:
-        pass
     await page.wait_for_timeout(200)
 
-    # cek "Jumlah Dukungan: Rp{amount}"
+    # 2) pastikan amount tercermin
     try:
         rupiah = f"{amount:,}".replace(",", ".")
-        await page.get_by_text(re.compile(rf"Jumlah Dukungan:\s*Rp{rupiah}\b")).wait_for(timeout=4000)
+        await page.get_by_text(re.compile(rf"(Jumlah Dukungan|Subtotal).*Rp\s*{rupiah}\b", re.I)).wait_for(timeout=3500)
         print("[scraper] amount reflected in UI")
     except Exception:
-        print("[scraper] WARN: amount not reflected in 'Jumlah Dukungan'")
+        print("[scraper] INFO: amount reflection not found; will rely on total scanner")
 
-    # tunggu Total > 0
-    try:
-        await page.wait_for_function(
-            """
-            () => {
-              const el = [...document.querySelectorAll('*')]
-                .find(n => /Total:\s*Rp/i.test(n.textContent||''));
-              if (!el) return false;
-              const m = (el.textContent||'').match(/Total:\s*Rp\s*([\d.]+)/i);
-              if (!m) return false;
-              const num = parseInt(m[1].replace(/\./g,''));
-              return Number.isFinite(num) && num > 0;
-            }
-            """,
-            timeout=6000,
-        )
+    # 3) tunggu total > 0, dengan recovery langkah demi langkah
+    if await _wait_total_updated(page, WAIT_TOTAL_MS):
         print("[scraper] Total > 0 (OK)")
-    except Exception:
-        print("[scraper] WARN: Total still 0 after selecting GoPay")
+        return
+
+    print("[scraper] WARN: Total still 0 → recovery: retype amount & dispatch")
+    # retype amount
+    amount_input = None
+    for sel in [
+        'input[placeholder*="Ketik jumlah" i]',
+        'input[aria-label*="Nominal" i]',
+        'input[name="amount"]',
+        'input[type="number"]',
+        'input[autocomplete="off"] >> nth=0',
+    ]:
+        try:
+            loc = page.locator(sel)
+            if await loc.count() > 0:
+                amount_input = loc.first()
+                break
+        except Exception:
+            pass
+    if amount_input:
+        await amount_input.focus()
+        await _set_input_and_commit(amount_input, str(int(amount)))
+        await page.wait_for_timeout(350)
+        if await _wait_total_updated(page, 3000):
+            print("[scraper] Total > 0 (OK) after retype")
+            return
+
+    print("[scraper] INFO: toggle payment method to force re-calc")
+    # 4) toggle OVO/QRIS lalu balik ke GoPay
+    toggled = False
+    for alt in alt_method_selectors:
+        try:
+            loc = page.locator(alt)
+            if await loc.count() > 0:
+                await loc.first().click()
+                await page.wait_for_timeout(300)
+                toggled = True
+                break
+        except Exception:
+            pass
+
+    # klik GoPay lagi
+    for sel in gopay_selectors:
+        try:
+            el = page.locator(sel)
+            if await el.count() > 0:
+                await el.first().click()
+                await page.wait_for_timeout(350)
+                break
+        except Exception:
+            pass
+
+    if await _wait_total_updated(page, 2500):
+        print("[scraper] Total > 0 (OK) after toggle")
+        return
+
+    print("[scraper] WARN: Total still 0 after recovery steps")
 
 
 # ---------- isi form TANPA submit ----------
@@ -186,19 +329,13 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
         'input[aria-label*="Nominal" i]',
         'input[name="amount"]',
         'input[type="number"]',
+        'input[autocomplete="off"] >> nth=0',
     ]:
         try:
             el = await page.wait_for_selector(sel, timeout=3000)
             await el.scroll_into_view_if_needed()
             await el.click()
-            # clear
-            try:
-                await page.keyboard.press("Control+A")
-            except Exception:
-                await page.keyboard.press("Meta+A")
-            await page.keyboard.press("Backspace")
-            # ketik
-            await el.type(str(amount))
+            await _set_input_and_commit(el, str(int(amount)))
             amount_handle = el
             amount_ok = True
             print("[scraper] filled amount via", sel)
@@ -248,7 +385,7 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
             pass
     await page.wait_for_timeout(150)
 
-    # ===== message (Pesan) — INPUT → TEXTAREA =====
+    # ===== message (Pesan) — INPUT/TEXTAREA =====
     msg_ok = False
     for sel in [
         'input[name="message"]',
@@ -401,134 +538,108 @@ async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
         return None
 
-    context = await _new_context()
-    page = await context.new_page()
+    # Lakukan beberapa attempt agar stabil saat UI lambat
+    for attempt in range(1, MAX_RETRY + 1):
+        context = await _new_context()
+        page = await context.new_page()
+        try:
+            await page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=20000)
+            await page.wait_for_load_state("networkidle", timeout=8000)
+            await page.wait_for_timeout(600)
+            await page.mouse.wheel(0, 500)
 
-    def _selectors():
-        return [
-            'img.qr-image',
-            'img.qr-image--with-wrapper',
-            'img[alt*="qr-code" i]',
-            'img[src*="/qr-code"]',
-            '[data-testid="qrcode"] img',
-            '[class*="qrcode" i] img',
-            'img[alt*="QRIS" i]',
-            "canvas",  # fallback terakhir
-        ]
+            await _fill_without_submit(page, amount, message, "gopay")
 
-    try:
-        # 1) profil + isi form + pilih GoPay
-        await page.goto(PROFILE_URL, wait_until="domcontentloaded")
-        await page.wait_for_timeout(600)
-        await page.mouse.wheel(0, 500)
-        await _fill_without_submit(page, amount, message, "gopay")
+            # klik "Kirim Dukungan" -> checkout target
+            target = await _click_donate_and_get_checkout_page(page, context)
+            node: Page | Frame = target["frame"] if target["frame"] else (target["page"] or page)
 
-        # 2) klik "Kirim Dukungan" -> checkout target
-        target = await _click_donate_and_get_checkout_page(page, context)
-        node: Page | Frame = target["frame"] if target["frame"] else (target["page"] or page)
+            # QR sel
+            qr_handle = await _wait_qr_ready(node, WAIT_QR_MS)
+            if not qr_handle:
+                # scroll lagi untuk memicu lazy-load, lalu coba sekali lagi
+                try:
+                    if hasattr(node, "mouse"):
+                        await node.mouse.wheel(0, 800)  # type: ignore
+                    await asyncio.sleep(0.4)
+                except Exception:
+                    pass
+                qr_handle = await _wait_qr_ready(node, 4000)
 
-        # 3) cari elemen QR (img/canvas)
-        qr_handle = None
-        for sel in _selectors():
-            try:
-                qr_handle = await node.wait_for_selector(sel, timeout=3500)
-                if qr_handle:
-                    print("[scraper] QR handle via", sel)
-                    break
-            except PWError:
-                pass
+            if not qr_handle:
+                print(f"[scraper] attempt {attempt}: QR not found; fallback to panel")
+                panel = await _find_qr_or_checkout_panel(node) or node
+                png = await (panel.screenshot() if hasattr(panel, "screenshot") else node.screenshot(full_page=True))
+                await context.close()
+                return png
 
-        # jika belum ketemu, scan semua frame yang “nyerempet” pembayaran
-        if not qr_handle:
-            frames = node.page.frames if hasattr(node, "page") and node.page else page.frames
-            for fr in frames:
-                url = (fr.url or "").lower()
-                if any(k in url for k in ["gopay", "qris", "midtrans", "snap", "checkout", "pay"]):
-                    for sel in _selectors():
-                        try:
-                            qr_handle = await fr.wait_for_selector(sel, timeout=2500)
-                            if qr_handle:
-                                print("[scraper] QR handle via", sel, "in frame", url[:100])
-                                break
-                        except PWError:
-                            pass
-                if qr_handle:
-                    break
+            tag_name = await qr_handle.evaluate("(el)=>el.tagName.toLowerCase()")
+            if tag_name == "img":
+                src = await qr_handle.evaluate("(img)=>img.currentSrc || img.src || ''")
+                if not src:
+                    print("[scraper] WARN: img src empty; fallback to screenshot")
+                    await qr_handle.scroll_into_view_if_needed()
+                    png = await qr_handle.screenshot()
+                    await context.close()
+                    return png
 
-        if not qr_handle:
-            print("[scraper] WARN: QR handle not found; fallback to panel shot")
-            panel = await _find_qr_or_checkout_panel(node) or node
-            png = await (panel.screenshot() if hasattr(panel, "screenshot") else node.screenshot(full_page=True))
-            await context.close()
-            return png
+                if src.startswith("data:image/"):
+                    header, b64 = src.split(",", 1)
+                    try:
+                        data = base64.b64decode(b64)
+                        await context.close()
+                        return data
+                    except Exception as e:
+                        print("[scraper] WARN: decode data URL failed:", e)
 
-        # 4) ambil data bytes:
-        tag_name = await qr_handle.evaluate("(el)=>el.tagName.toLowerCase()")
-        if tag_name == "img":
-            src = await qr_handle.evaluate("(img)=>img.currentSrc || img.src || ''")
-            if not src:
-                print("[scraper] WARN: img src empty; fallback to screenshot")
+                base_url = node.url if hasattr(node, "url") else page.url
+                abs_url = urljoin(base_url, src)
+
+                try:
+                    r = await context.request.get(
+                        abs_url,
+                        headers={
+                            "Referer": base_url,
+                            "User-Agent": await page.evaluate("() => navigator.userAgent"),
+                            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                        },
+                        timeout=15000,
+                    )
+                    if r.ok:
+                        data = await r.body()
+                        print("[scraper] downloaded QR img bytes:", len(data))
+                        await context.close()
+                        return data
+                    else:
+                        print("[scraper] WARN: request img failed", r.status)
+                except Exception as e:
+                    print("[scraper] WARN: fetch img error:", e)
+
+                # fallback: screenshot elemen
                 await qr_handle.scroll_into_view_if_needed()
                 png = await qr_handle.screenshot()
                 await context.close()
                 return png
 
-            # data URL?
-            if src.startswith("data:image/"):
-                header, b64 = src.split(",", 1)
-                try:
-                    data = base64.b64decode(b64)
-                    await context.close()
-                    return data
-                except Exception as e:
-                    print("[scraper] WARN: decode data URL failed:", e)
-
-            # absolute-kan jika relatif terhadap halaman/iframe
-            base_url = node.url if hasattr(node, "url") else page.url
-            abs_url = urljoin(base_url, src)
-
-            # download pakai context.request → dapat bytes murni
-            try:
-                r = await context.request.get(
-                    abs_url,
-                    headers={
-                        "Referer": base_url,
-                        "User-Agent": await page.evaluate("() => navigator.userAgent"),
-                        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-                    },
-                    timeout=15000,
-                )
-                if r.ok:
-                    data = await r.body()
-                    print("[scraper] downloaded QR img bytes:", len(data))
-                    await context.close()
-                    return data
-                else:
-                    print("[scraper] WARN: request img failed", r.status)
-            except Exception as e:
-                print("[scraper] WARN: fetch img error:", e)
-
-            # fallback: screenshot elemen
+            # non-IMG (canvas/dll) → screenshot
             await qr_handle.scroll_into_view_if_needed()
             png = await qr_handle.screenshot()
             await context.close()
             return png
 
-        # tag bukan IMG (mis. canvas) → screenshot
-        await qr_handle.scroll_into_view_if_needed()
-        png = await qr_handle.screenshot()
-        await context.close()
-        return png
+        except Exception as e:
+            print(f"[scraper] attempt {attempt} failed:", e)
+            try:
+                snap = await page.screenshot(full_page=True)
+                print("[scraper] debug page screenshot bytes:", len(snap))
+            except Exception:
+                pass
+            await context.close()
+            if attempt >= MAX_RETRY:
+                return None
+            await asyncio.sleep(0.6 * attempt)  # backoff ringan
 
-    except Exception as e:
-        print("[scraper] error(fetch_gopay_qr_hd_png):", e)
-        try:
-            snap = await page.screenshot(full_page=True)
-            print("[scraper] debug page screenshot bytes:", len(snap))
-        except Exception:
-            pass
-        await context.close()
-        return None
+    return None
 
 
 # ---------- entrypoints tambahan (opsional / debugging) ----------
@@ -543,7 +654,8 @@ async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay
     context = await _new_context()
     page = await context.new_page()
     try:
-        await page.goto(PROFILE_URL, wait_until="domcontentloaded")
+        await page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=20000)
+        await page.wait_for_load_state("networkidle", timeout=8000)
         await page.wait_for_timeout(700)
         await page.mouse.wheel(0, 480)
 
@@ -589,7 +701,8 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> Optional[bytes]
     context = await _new_context()
     page = await context.new_page()
     try:
-        await page.goto(PROFILE_URL, wait_until="domcontentloaded")
+        await page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=20000)
+        await page.wait_for_load_state("networkidle", timeout=8000)
         await page.wait_for_timeout(700)
         await page.mouse.wheel(0, 480)
 
@@ -630,7 +743,8 @@ async def debug_snapshot() -> Optional[bytes]:
         return None
     context = await _new_context()
     page = await context.new_page()
-    await page.goto(PROFILE_URL, wait_until="domcontentloaded")
+    await page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=20000)
+    await page.wait_for_load_state("networkidle", timeout=8000)
     await page.wait_for_timeout(1000)
     await page.mouse.wheel(0, 600)
     png = await page.screenshot(full_page=True)
@@ -645,7 +759,8 @@ async def debug_fill_snapshot(amount: int, message: str, method: str = "gopay") 
     context = await _new_context()
     page = await context.new_page()
     try:
-        await page.goto(PROFILE_URL, wait_until="domcontentloaded")
+        await page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=20000)
+        await page.wait_for_load_state("networkidle", timeout=8000)
         await page.wait_for_timeout(700)
         await page.mouse.wheel(0, 480)
 
