@@ -1,42 +1,92 @@
 <!doctype html>
-<html>
+<html lang="id">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>EnSEXlopedia Mini Apps</title>
+  <title>Mini App — Checkout</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
-    body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
-    #qr img { max-width: 240px; border:1px solid #eee; padding:6px; border-radius:8px }
-    button { padding:8px 12px; border-radius:8px; border:1px solid #ddd; background:#f5f5f5 }
-  
-    .totalbar { position: sticky; bottom: 0; left: 0; right: 0; background:#fff;
-      border-top:1px solid #eee; padding:10px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    :root {
+      --border:#eee;
+      --muted:#666;
+      --bg:#fff;
+    }
+    body {
+      margin:0; padding:16px;
+      font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+      background:#fafafa;
+    }
+    h1 { font-size:18px; margin:0 0 12px 0; }
+    .card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; }
+    .section { margin-bottom:12px; }
+    .group-list label {
+      display:flex; align-items:center; gap:10px;
+      padding:10px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; background:#fff;
+    }
+    .row { display:flex; align-items:center; gap:10px; }
+    .row > * { flex:1; }
+    input[type="number"], input[type="text"] {
+      width:100%; padding:10px; border:1px solid var(--border); border-radius:10px;
+      background:#fff; font-size:14px;
+    }
+    .totalbar {
+      position: sticky; bottom: 0; left: 0; right: 0;
+      background:var(--bg); border-top:1px solid var(--border);
+      padding:12px; display:flex; align-items:center; justify-content:space-between; gap:12px;
+    }
     .total-left { display:flex; flex-direction:column; line-height:1.1; }
-    .total-label { font-size:12px; color:#666; }
-    .total-value { font-weight:700; font-size:18px; }
-    .checkout-btn { padding:10px 14px; border-radius:10px; border:0; background:#0ea5e9; color:#fff; font-weight:600; }
-    body { padding-bottom: 70px; } /* space for sticky bar */
+    .total-label { font-size:12px; color:var(--muted); }
+    .total-value { font-weight:700; font-size:16px; }
+    .checkout-btn {
+      padding:12px 16px; border-radius:10px; border:1px solid var(--border);
+      background:#f5f5f5; font-weight:600; cursor:pointer;
+    }
+    #qr img { max-width:240px; border:1px solid var(--border); padding:6px; border-radius:8px }
+    #msg-preview { font-size:12px; color:var(--muted); margin-top:2px; }
   </style>
 </head>
 <body>
-  <h3>Pilih Grup</h3>
-  <div id="groups"></div>
 
-  <input id="amount" type="hidden" value="25000"/>
+  <h1>Pilih Grup</h1>
+
+  <!-- Groups -->
+  <div class="section card">
+    <div id="groups" class="group-list">
+      <!-- Daftar grup akan di-render via app.js -->
+    </div>
+  </div>
+
+  <!-- Amount + (opsional) User ID manual fallback -->
+  <div class="section card">
+    <div class="row" style="margin-bottom:8px">
+      <div>
+        <label for="amount" style="font-size:12px;color:#666">Nominal (otomatis dari pilihan grup, bisa ubah manual)</label>
+        <input id="amount" type="number" min="0" step="1000" placeholder="Masukkan nominal" />
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="user_id" style="font-size:12px;color:#666">Telegram User ID (opsional, auto dari Mini App)</label>
+        <input id="user_id" type="number" inputmode="numeric" placeholder="Auto dari Telegram — isi jika perlu" />
+      </div>
+    </div>
+  </div>
+
+  <!-- Total bar + preview message -->
   <div id="totalbar" class="totalbar">
     <div class="total-left">
       <div class="total-label">Total</div>
-      <div class="total-value" id="total-text">Rp 25.000</div>
+      <div class="total-value" id="total-text">Rp 0</div>
     </div>
-    <!-- di index.html, di dalam #totalbar (atau tepat di atas tombol) -->
-    <div id="msg-preview" style="font-size:12px;color:#666"></div>
-
+    <!-- Preview pesan akan diisi 'Pesan: INV:<invoice_id>' oleh app.js setelah invoice dibuat -->
+    <div id="msg-preview"></div>
     <button id="pay" class="checkout-btn">Checkout</button>
   </div>
 
-<div id="qr" style="margin-top:16px;"></div>
+  <!-- Tempat QR & detail invoice -->
+  <div id="qr" class="section"></div>
 
-  <script src="./app.js?v=20251022-2"></script>
+  <!-- Client logic -->
+  <script src="./app.js?v=20251023-inv"></script>
 </body>
 </html>
