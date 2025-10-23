@@ -2,7 +2,7 @@
 # ------------------------------------------------------------
 # Penyimpanan sederhana pakai SQLite.
 # Table:
-# - invoices(invoice_id, user_id, amount, groups_json, status, qris_payload, paid_at, created_at, code)
+# - invoices(invoice_id, user_id, amount, groups_json, status, qris_payload, paid_at, created_at)
 # - invite_logs(id, invoice_id, group_id, invite_link, error, created_at)
 # ------------------------------------------------------------
 
@@ -22,14 +22,6 @@ def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
-
-def _ensure_column(conn: sqlite3.Connection, table: str, col: str, coltype: str) -> None:
-    cur = conn.cursor()
-    cur.execute(f"PRAGMA table_info({table})")
-    cols = {r[1] for r in cur.fetchall()}
-    if col not in cols:
-        cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
-        conn.commit()
 
 def init_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -57,32 +49,17 @@ def init_db() -> None:
         created_at  INTEGER NOT NULL
     )
     """)
-    # migrasi ringan: tambahkan kolom code bila belum ada
-    _ensure_column(conn, "invoices", "code", "TEXT")
     conn.commit()
     conn.close()
 
 # ---------- helpers ----------
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
-    d = {k: row[k] for k in row.keys()}
-    # turunkan group_id dari groups_json jika belum ada
-    if "group_id" not in d:
-        try:
-            groups = json.loads(d.get("groups_json") or "[]")
-            if isinstance(groups, list) and groups:
-                d["group_id"] = str(groups[0])
-        except Exception:
-            d["group_id"] = None
-    return d
+    return {k: row[k] for k in row.keys()}
 
 # ---------- invoices ----------
-def create_invoice(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
-    """
-    Diselaraskan dgn main.py: terima single group_id.
-    Tetap simpan ke groups_json sebagai list satu elemen.
-    """
+def create_invoice(user_id: int, groups: List[str], amount: int) -> Dict[str, Any]:
     invoice_id = str(uuid.uuid4())
-    groups_json = json.dumps([group_id], ensure_ascii=False)
+    groups_json = json.dumps(groups, ensure_ascii=False)
     now = int(time.time())
     conn = _get_conn()
     cur = conn.cursor()
@@ -94,44 +71,7 @@ def create_invoice(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
     cur.execute("SELECT * FROM invoices WHERE invoice_id = ?", (invoice_id,))
     row = cur.fetchone()
     conn.close()
-    d = _row_to_dict(row)
-    return d
-
-def save_invoice(inv: Dict[str, Any]) -> None:
-    """
-    Upsert ringan: update kolom yang relevan berdasarkan invoice_id.
-    Menyimpan field 'code' agar _storage_find_by_code_prefix bisa bekerja.
-    """
-    invoice_id = inv["invoice_id"]
-    # sinkronkan groups_json jika ada group_id
-    groups_json = inv.get("groups_json")
-    if not groups_json and inv.get("group_id"):
-        groups_json = json.dumps([inv["group_id"]], ensure_ascii=False)
-
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE invoices
-           SET user_id      = COALESCE(?, user_id),
-               amount       = COALESCE(?, amount),
-               groups_json  = COALESCE(?, groups_json),
-               status       = COALESCE(?, status),
-               qris_payload = COALESCE(?, qris_payload),
-               paid_at      = COALESCE(?, paid_at),
-               code         = COALESCE(?, code)
-         WHERE invoice_id   = ?
-    """, (
-        inv.get("user_id"),
-        inv.get("amount"),
-        groups_json,
-        inv.get("status"),
-        inv.get("qris_payload"),
-        inv.get("paid_at"),
-        inv.get("code"),
-        invoice_id,
-    ))
-    conn.commit()
-    conn.close()
+    return _row_to_dict(row)
 
 def get_invoice(invoice_id: str) -> Optional[Dict[str, Any]]:
     conn = _get_conn()
@@ -141,12 +81,12 @@ def get_invoice(invoice_id: str) -> Optional[Dict[str, Any]]:
     conn.close()
     return _row_to_dict(row) if row else None
 
-def list_invoices(limit: int = 200) -> List[Dict[str, Any]]:
+def list_invoices(limit: int = 20) -> List[Dict[str, Any]]:
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute("SELECT * FROM invoices ORDER BY created_at DESC LIMIT ?", (limit,))
     rows = cur.fetchall()
-    conn.close
+    conn.close()
     return [_row_to_dict(r) for r in rows]
 
 def update_invoice_status(invoice_id: str, status: str) -> Optional[Dict[str, Any]]:
