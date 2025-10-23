@@ -6,43 +6,23 @@
   <title>Mini App — Checkout</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
-    :root {
-      --border:#eee;
-      --muted:#666;
-      --bg:#fff;
-    }
-    body {
-      margin:0; padding:16px;
-      font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-      background:#fafafa;
-    }
+    :root { --border:#eee; --muted:#666; --bg:#fff; }
+    body { margin:0; padding:16px; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:#fafafa; }
     h1 { font-size:18px; margin:0 0 12px 0; }
     .card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; }
     .section { margin-bottom:12px; }
-    .group-list label {
-      display:flex; align-items:center; gap:10px;
-      padding:10px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; background:#fff;
-    }
+    .group-list label { display:flex; align-items:center; gap:10px; padding:10px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; background:#fff; }
     .row { display:flex; align-items:center; gap:10px; }
     .row > * { flex:1; }
-    input[type="number"], input[type="text"] {
-      width:100%; padding:10px; border:1px solid var(--border); border-radius:10px;
-      background:#fff; font-size:14px;
-    }
-    .totalbar {
-      position: sticky; bottom: 0; left: 0; right: 0;
-      background:var(--bg); border-top:1px solid var(--border);
-      padding:12px; display:flex; align-items:center; justify-content:space-between; gap:12px;
-    }
+    input[type="number"], input[type="text"] { width:100%; padding:10px; border:1px solid var(--border); border-radius:10px; background:#fff; font-size:14px; }
+    .totalbar { position: sticky; bottom: 0; left: 0; right: 0; background:var(--bg); border-top:1px solid var(--border); padding:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .total-left { display:flex; flex-direction:column; line-height:1.1; }
     .total-label { font-size:12px; color:var(--muted); }
     .total-value { font-weight:700; font-size:16px; }
-    .checkout-btn {
-      padding:12px 16px; border-radius:10px; border:1px solid var(--border);
-      background:#f5f5f5; font-weight:600; cursor:pointer;
-    }
+    .checkout-btn { padding:12px 16px; border-radius:10px; border:1px solid var(--border); background:#f5f5f5; font-weight:600; cursor:pointer; }
     #qr img { max-width:240px; border:1px solid var(--border); padding:6px; border-radius:8px }
     #msg-preview { font-size:12px; color:var(--muted); margin-top:2px; }
+    .tip { font-size:12px; color:#b25; margin:8px 0; }
   </style>
 </head>
 <body>
@@ -56,18 +36,12 @@
     </div>
   </div>
 
-  <!-- Amount + (opsional) User ID manual fallback -->
+  <!-- Amount -->
   <div class="section card">
     <div class="row" style="margin-bottom:8px">
       <div>
         <label for="amount" style="font-size:12px;color:#666">Nominal (otomatis dari pilihan grup, bisa ubah manual)</label>
         <input id="amount" type="number" min="0" step="1000" placeholder="Masukkan nominal" />
-      </div>
-    </div>
-    <div class="row">
-      <div>
-        <label for="user_id" style="font-size:12px;color:#666">Telegram User ID (opsional, auto dari Mini App)</label>
-        <input id="user_id" type="number" inputmode="numeric" placeholder="Auto dari Telegram — isi jika perlu" />
       </div>
     </div>
   </div>
@@ -87,6 +61,6 @@
   <div id="qr" class="section"></div>
 
   <!-- Client logic -->
-  <script src="./app.js?v=20251023-inv"></script>
+  <script src="./app.js?v=20251023-inv-optA"></script>
 </body>
 </html>
