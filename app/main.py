@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -20,50 +21,65 @@ BASE_URL       = os.environ["BASE_URL"].strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 ENV            = os.getenv("ENV", "dev")
 
+# default harga (untuk front-end yang butuh angka)
+DEFAULT_PRICE = int(os.getenv("DEFAULT_PRICE", "25000"))
+
 # ==== GROUPS ====
 GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "").strip()
 
-def parse_groups(env_val: str) -> List[Dict[str, str]]:
+def parse_groups(env_val: str) -> List[Dict[str, Any]]:
     """
-    Format didukung:
-    - JSON list of dicts: [{"id":"-100123","name":"VIP","initial":"25000"}]
-    - JSON dict map: {"-100123":"VIP", "-100234":"General"}
-    - JSON list of strings: ["-100123","-100234"]
-    - String tunggal: "-100123"
+    Terima berbagai format:
+    - [{"id":"-100..","name":"VIP","initial":"V"}]
+    - {"-100..":"VIP", "-100..":"General"}
+    - ["-100..","-100.."]
+    - "-100.."
+    Output distandarkan: {"id","name","title","label","initial","price"}
     """
-    groups: List[Dict[str, str]] = []
+    groups: List[Dict[str, Any]] = []
     if not env_val:
         return groups
     try:
         data = json.loads(env_val)
-        if isinstance(data, dict):
-            for k, v in data.items():
-                groups.append({"id": str(k), "name": str(v)})
-        elif isinstance(data, list):
-            for it in data:
-                if isinstance(it, dict):
-                    gid = str(it.get("id") or it.get("group_id") or it.get("value") or "").strip()
-                    nm  = str(it.get("name") or it.get("label")    or it.get("text")  or "").strip()
-                    init = str(it.get("initial") or it.get("price") or "").strip()
-                    if gid and nm:
-                        d = {"id": gid, "name": nm}
-                        if init:
-                            d["initial"] = init
-                        groups.append(d)
-                else:
-                    gid = str(it).strip()
-                    if gid:
-                        groups.append({"id": gid, "name": gid})
-        else:
-            s = str(data).strip()
-            if s:
-                groups.append({"id": s, "name": s})
     except Exception:
-        # kalau bukan JSON, anggap string biasa
-        s = env_val.strip()
+        data = env_val  # fallback: raw string
+
+    def _push(gid: str, name: Optional[str] = None, initial: Optional[str] = None):
+        gid = str(gid).strip()
+        nm  = (name or gid).strip()
+        obj: Dict[str, Any] = {
+            "id": gid,
+            "name": nm,
+            "title": nm,
+            "label": nm,
+            "price": DEFAULT_PRICE,
+        }
+        if initial:
+            obj["initial"] = str(initial).strip()
+        groups.append(obj)
+
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, dict):
+                _push(v.get("id") or k, v.get("name") or v.get("label") or v.get("text") or str(k), v.get("initial") or v.get("abbr"))
+            else:
+                _push(k, str(v))
+    elif isinstance(data, list):
+        for it in data:
+            if isinstance(it, dict):
+                _push(
+                    it.get("id") or it.get("group_id") or it.get("value"),
+                    it.get("name") or it.get("label") or it.get("text"),
+                    it.get("initial") or it.get("abbr"),
+                )
+            else:
+                _push(str(it))
+    else:
+        s = str(data).strip()
         if s:
-            groups.append({"id": s, "name": s})
-    return groups
+            _push(s)
+
+    return [g for g in groups if g.get("id")]
 
 GROUPS = parse_groups(GROUPS_ENV)
 
@@ -71,37 +87,47 @@ GROUPS = parse_groups(GROUPS_ENV)
 if not GROUPS:
     fallback_gid = os.getenv("GROUP_ID") or os.getenv("TELEGRAM_GROUP_ID")
     if fallback_gid:
-        GROUPS = [{"id": fallback_gid.strip(), "name": "Default Group"}]
+        GROUPS = [{"id": fallback_gid.strip(), "name": "Default Group", "title": "Default Group", "label": "Default Group", "price": DEFAULT_PRICE}]
 
 # ===================== FastAPI =====================
 app = FastAPI(title="Telegram × Saweria Bot")
 
+# CORS (kalau webapp load via fetch)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # ---------- Static mounts ----------
+def _resolve_dir(*candidates: Path) -> Optional[Path]:
+    for p in candidates:
+        if p and p.is_dir():
+            return p.resolve()
+    return None
+
 def _resolve_webapp_dir() -> Optional[Path]:
-    if os.getenv("WEBAPP_DIR"):
-        p = Path(os.getenv("WEBAPP_DIR")).resolve()
+    envp = os.getenv("WEBAPP_DIR")
+    if envp:
+        p = Path(envp).resolve()
         if p.is_dir():
             return p
     here = Path(__file__).resolve().parent
     repo_root = here.parent
-    candidates = [
+    return _resolve_dir(
         here / "webapp",
         repo_root / "webapp",
         Path.cwd() / "webapp",
         Path.cwd() / "app" / "webapp",
-    ]
-    for p in candidates:
-        if p.is_dir():
-            return p.resolve()
-    return None
+    )
 
 # /public (opsional)
-public_dir = None
-for cand in [Path(__file__).resolve().parent / "public", Path.cwd() / "public"]:
-    if cand.is_dir():
-        public_dir = cand.resolve()
-        break
-
+public_dir = _resolve_dir(
+    Path(__file__).resolve().parent / "public",
+    Path.cwd() / "public"
+)
 if public_dir:
     print(f"[static] Mounting /public -> {public_dir}")
     app.mount("/public", StaticFiles(directory=str(public_dir)), name="public")
@@ -122,23 +148,37 @@ def root():
     return {"ok": True, "message": "Service is running. Put your front-end in a 'webapp/' folder."}
 
 # ---------- ENDPOINT CONFIG/GRUPS UNTUK FRONT-END ----------
+def _groups_payload():
+    # kirim di 3 alias agar kompatibel ke berbagai FE
+    return {
+        "ok": True,
+        "groups": GROUPS,
+        "items": GROUPS,
+        "options": GROUPS,
+        "env": ENV,
+        "baseUrl": BASE_URL,
+        "defaultPrice": DEFAULT_PRICE,
+    }
+
 @app.get("/api/groups")
 def api_groups():
-    """
-    Endpoint yang dikonsumsi front-end untuk daftar grup.
-    """
-    return {"ok": True, "groups": GROUPS}
+    return _groups_payload()
+
+@app.get("/api/items")
+def api_items():
+    return _groups_payload()
+
+@app.get("/api/options")
+def api_options():
+    return _groups_payload()
 
 @app.get("/webapp/config.json")
 def webapp_config():
-    """
-    Alternatif jika front-end load /webapp/config.json.
-    """
-    return {
-        "baseUrl": BASE_URL,
-        "groups": GROUPS,
-        "env": ENV,
-    }
+    return _groups_payload()
+
+@app.get("/webapp/groups.json")
+def webapp_groups_json():
+    return _groups_payload()
 
 # ---------- Telegram Bot lifecycle ----------
 bot_app: Application = build_app()
@@ -195,15 +235,12 @@ def _storage_get(invoice_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
-    """
-    storage.create_invoice() di storage.py menerima (user_id, groups: List[str], amount)
-    jadi kita bungkus group_id menjadi list.
-    """
+    # storage.create_invoice(user_id, groups: List[str], amount)
     if hasattr(storage, "create_invoice"):
         try:
             inv = storage.create_invoice(user_id, [group_id], amount)  # type: ignore
         except TypeError:
-            inv = storage.create_invoice(user_id, group_id, amount)  # type: ignore
+            inv = storage.create_invoice(user_id, group_id, amount)   # type: ignore (kompat lama)
     else:
         inv = {
             "invoice_id": os.urandom(16).hex(),
@@ -314,28 +351,6 @@ async def api_status(invoice_id: str):
 
 INV_FULL_RE = re.compile(r"(INV[:：]\s*[A-Za-z0-9\-]+)", re.I)
 
-def _extract_invoice_id_from_payload(data: Any) -> Optional[str]:
-    if data is None:
-        return None
-    candidates: List[str] = []
-    if isinstance(data, dict):
-        for k in ["message", "pesan", "note", "notes", "comment", "payload", "metadata", "data", "custom_field", "custom"]:
-            v = data.get(k)
-            if isinstance(v, str):
-                candidates.append(v)
-            elif isinstance(v, (dict, list)):
-                candidates.append(json.dumps(v))
-        candidates.append(json.dumps(data))
-    elif isinstance(data, list):
-        candidates.append(json.dumps(data))
-    elif isinstance(data, str):
-        candidates.append(data)
-    for text in candidates:
-        m = INV_FULL_RE.search(text or "")
-        if m:
-            return m.group(1).replace("：", ":").replace(" ", "")
-    return None
-
 def _is_success_status(data: Any) -> bool:
     if isinstance(data, dict):
         s = str(data.get("status", "")).upper()
@@ -395,7 +410,7 @@ async def webhook_saweria(request: Request):
 
     try:
         chat_id = int(inv["user_id"])
-        # storage.create_invoice menyimpan groups sebagai list:
+        # storage.create_invoice menyimpan groups sebagai list
         target_group_id = str(inv.get("group_id") or (inv.get("groups") or [""])[0])
         await send_invite_link(bot_app, chat_id, target_group_id)
         print(f"[webhook] invite sent → user={chat_id} group={target_group_id}")
