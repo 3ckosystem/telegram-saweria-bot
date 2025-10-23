@@ -301,7 +301,6 @@ async def qr_png(
 
 
 # ------------- SAWERIA WEBHOOK (opsional) -------------
-# Jika kamu sudah menghubungkan webhook Saweria untuk tandai pembayaran "PAID"
 class SaweriaWebhookIn(BaseModel):
     status: str
     invoice_id: Optional[str] = None
@@ -309,6 +308,8 @@ class SaweriaWebhookIn(BaseModel):
     message: Optional[str] = None
 
 SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET", "")
+
+_UUID_RE = re.compile(r"(?i)\bINV:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b")
 
 def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
     if not SAWERIA_WEBHOOK_SECRET:
@@ -324,27 +325,56 @@ async def saweria_webhook(request: Request):
     raw = await request.body()
     if not _verify_saweria_signature(request, raw):
         raise HTTPException(403, "Bad signature")
-    # Tetap pakai yang sudah berjalan di environment kamu:
-    data = SaweriaWebhookIn.model_validate_json(raw)
-    if data.status.lower() != "paid":
+
+    # Tetap pakai parser yang sudah jalan di env kamu
+    try:
+        data = SaweriaWebhookIn.model_validate_json(raw)
+    except Exception:
+        # fallback kalau format berubah
+        data = SaweriaWebhookIn(**(json.loads(raw.decode() or "{}")))
+
+    # Hanya proses kalau status paid
+    if (data.status or "").lower() != "paid":
         return {"ok": True}
 
-    # tandai invoice paid (gunakan message atau external_id/invoice_id sesuai implementasi kamu)
-    inv = None
-    if data.invoice_id:
-        inv = payments.mark_paid(data.invoice_id)
-    if not inv:
-        raise HTTPException(404, "Invoice not found")
+    # Cari kandidat invoice_id: urutan prioritas -> invoice_id, external_id, INV:... di message
+    candidate_id = (data.invoice_id or "").strip()
+    if not candidate_id and data.external_id:
+        candidate_id = str(data.external_id).strip()
 
-    # kirim undangan ke semua grup terkait
-    groups = json.loads(inv["groups_json"])
+    if not candidate_id and data.message:
+        m = _UUID_RE.search(data.message or "")
+        if m:
+            candidate_id = m.group(1)
+
+    if not candidate_id:
+        # Tidak ada ID yang bisa dipetakan — log saja biar bisa dianalisis
+        storage.add_invite_log("(unknown)", "(unknown)", None, f"webhook paid tanpa id: {raw[:300]!r}")
+        return {"ok": True}  # jangan 4xx supaya Saweria tidak retry terus
+
+    # Tandai paid dan ambil invoice
+    inv = payments.mark_paid(candidate_id)
+    if not inv:
+        # Coba baca langsung (kalau mark_paid butuh format lain)
+        inv = payments.get_invoice(candidate_id)
+        if not inv:
+            raise HTTPException(404, "Invoice not found")
+
+    # Kirim undangan ke semua grup terkait
+    try:
+        groups = json.loads(inv.get("groups_json") or "[]")
+    except Exception:
+        groups = []
+
     for gid in groups:
         try:
             await send_invite_link(bot_app, inv["user_id"], gid)
-            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-bot)", None)
+            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-webhook)", None)
         except Exception as e:
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
+
     return {"ok": True}
+
 
 # >>> ADD: endpoint manual trigger kirim undangan (untuk debug)
 @app.post("/api/invoice/{invoice_id}/send-invites")
