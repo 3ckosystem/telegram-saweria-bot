@@ -20,21 +20,15 @@ BOT_TOKEN      = os.environ["BOT_TOKEN"]
 BASE_URL       = os.environ["BASE_URL"].strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 ENV            = os.getenv("ENV", "dev")
-
-# default harga (untuk front-end yang butuh angka)
-DEFAULT_PRICE = int(os.getenv("DEFAULT_PRICE", "25000"))
+DEFAULT_PRICE  = int(os.getenv("DEFAULT_PRICE", "25000"))
 
 # ==== GROUPS ====
-GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "").strip()
+GROUPS_ENV = (os.environ.get("GROUP_IDS_JSON") or "").strip()
 
 def parse_groups(env_val: str) -> List[Dict[str, Any]]:
     """
-    Terima berbagai format:
-    - [{"id":"-100..","name":"VIP","initial":"V"}]
-    - {"-100..":"VIP", "-100..":"General"}
-    - ["-100..","-100.."]
-    - "-100.."
-    Output distandarkan: {"id","name","title","label","initial","price"}
+    Terima berbagai format dan distandarkan:
+    → {id,name,title,label,initial,price}
     """
     groups: List[Dict[str, Any]] = []
     if not env_val:
@@ -42,11 +36,13 @@ def parse_groups(env_val: str) -> List[Dict[str, Any]]:
     try:
         data = json.loads(env_val)
     except Exception:
-        data = env_val  # fallback: raw string
+        data = env_val
 
     def _push(gid: str, name: Optional[str] = None, initial: Optional[str] = None):
         gid = str(gid).strip()
-        nm  = (name or gid).strip()
+        if not gid:
+            return
+        nm = (name or gid).strip()
         obj: Dict[str, Any] = {
             "id": gid,
             "name": nm,
@@ -76,23 +72,28 @@ def parse_groups(env_val: str) -> List[Dict[str, Any]]:
                 _push(str(it))
     else:
         s = str(data).strip()
-        if s:
-            _push(s)
+        _push(s)
 
-    return [g for g in groups if g.get("id")]
+    return groups
 
 GROUPS = parse_groups(GROUPS_ENV)
 
-# Fallback: dukung 1 var GROUP_ID agar tidak kosong sama sekali
+# Fallback 1 var agar tak kosong sama sekali
 if not GROUPS:
     fallback_gid = os.getenv("GROUP_ID") or os.getenv("TELEGRAM_GROUP_ID")
     if fallback_gid:
-        GROUPS = [{"id": fallback_gid.strip(), "name": "Default Group", "title": "Default Group", "label": "Default Group", "price": DEFAULT_PRICE}]
+        GROUPS = [{
+            "id": fallback_gid.strip(),
+            "name": "Default Group",
+            "title": "Default Group",
+            "label": "Default Group",
+            "price": DEFAULT_PRICE
+        }]
 
 # ===================== FastAPI =====================
 app = FastAPI(title="Telegram × Saweria Bot")
 
-# CORS (kalau webapp load via fetch)
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -149,9 +150,9 @@ def root():
 
 # ---------- ENDPOINT CONFIG/GRUPS UNTUK FRONT-END ----------
 def _groups_payload():
-    # kirim di 3 alias agar kompatibel ke berbagai FE
     return {
         "ok": True,
+        "count": len(GROUPS),
         "groups": GROUPS,
         "items": GROUPS,
         "options": GROUPS,
@@ -160,6 +161,7 @@ def _groups_payload():
         "defaultPrice": DEFAULT_PRICE,
     }
 
+# Aliases di /api/*
 @app.get("/api/groups")
 def api_groups():
     return _groups_payload()
@@ -172,12 +174,26 @@ def api_items():
 def api_options():
     return _groups_payload()
 
+@app.get("/api/config")
+def api_config():
+    return _groups_payload()
+
+# Aliases di bawah /webapp (untuk fetch relatif dari index.html)
 @app.get("/webapp/config.json")
 def webapp_config():
     return _groups_payload()
 
 @app.get("/webapp/groups.json")
 def webapp_groups_json():
+    return _groups_payload()
+
+# Aliases di ROOT (untuk fetch('/groups.json') atau fetch('/config.json'))
+@app.get("/config.json")
+def root_config_json():
+    return _groups_payload()
+
+@app.get("/groups.json")
+def root_groups_json():
     return _groups_payload()
 
 # ---------- Telegram Bot lifecycle ----------
@@ -188,6 +204,7 @@ register_handlers(bot_app)
 async def on_start():
     print("[startup] init DB…")
     storage.init_db()
+    print(f"[startup] GROUPS loaded: {len(GROUPS)} item(s)")
 
     print("[startup] launching bot app…")
     await bot_app.initialize()
@@ -221,7 +238,6 @@ async def telegram_webhook(request: Request):
 # ==================================================
 # ==============  API UNTUK MINI APP  ==============
 # ==================================================
-
 class CreateInvoiceIn(BaseModel):
     user_id: int
     group_id: str
@@ -240,7 +256,7 @@ def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
         try:
             inv = storage.create_invoice(user_id, [group_id], amount)  # type: ignore
         except TypeError:
-            inv = storage.create_invoice(user_id, group_id, amount)   # type: ignore (kompat lama)
+            inv = storage.create_invoice(user_id, group_id, amount)   # type: ignore
     else:
         inv = {
             "invoice_id": os.urandom(16).hex(),
@@ -252,7 +268,6 @@ def _storage_create(user_id: int, group_id: str, amount: int) -> Dict[str, Any]:
         if hasattr(storage, "save_invoice"):
             storage.save_invoice(inv)  # type: ignore
 
-    # buat kode pendek
     inv_id = str(inv.get("invoice_id", ""))
     short = inv_id.replace("INV:", "").replace("inv:", "").replace("-", "")[:8].upper()
     code = f"INV:{short}" if short else f"INV:{os.urandom(4).hex().upper()}"
@@ -273,7 +288,7 @@ def _storage_update_status(invoice_id: str, status: str) -> Optional[Dict[str, A
             storage.save_invoice(inv)  # type: ignore
     return inv
 
-# === Regex utk ekstraksi key/kode invoice dari payload webhook ===
+# === Ekstraksi key/kode invoice dari payload webhook ===
 INV_KEY_RE = re.compile(r"(INV[:：]?\s*([A-Za-z0-9]{4,16}))", re.I)
 UUID_RE    = re.compile(r"\b[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\b", re.I)
 
@@ -348,9 +363,6 @@ async def api_status(invoice_id: str):
 # ==================================================
 # ===============  SAWERIA WEBHOOK  ================
 # ==================================================
-
-INV_FULL_RE = re.compile(r"(INV[:：]\s*[A-Za-z0-9\-]+)", re.I)
-
 def _is_success_status(data: Any) -> bool:
     if isinstance(data, dict):
         s = str(data.get("status", "")).upper()
@@ -410,7 +422,6 @@ async def webhook_saweria(request: Request):
 
     try:
         chat_id = int(inv["user_id"])
-        # storage.create_invoice menyimpan groups sebagai list
         target_group_id = str(inv.get("group_id") or (inv.get("groups") or [""])[0])
         await send_invite_link(bot_app, chat_id, target_group_id)
         print(f"[webhook] invite sent → user={chat_id} group={target_group_id}")
