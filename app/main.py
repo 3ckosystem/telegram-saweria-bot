@@ -259,8 +259,10 @@ async def qr_png(
     except Exception:
         inv_groups = []
     initials = [id_to_initial.get(str(g), "") for g in inv_groups]
-    # join dengan spasi (mis. "M A S")
-    message = " ".join([s.strip() for s in initials if s.strip()]) or f"INV:{invoice_id}"
+    
+    message = f"INV:{invoice_id}"
+
+    png = await fetch_gopay_qr_hd_png(int(amt), message)
 
     # 3) Jika sudah ada payload di DB → langsung kirim
     payload = inv.get("qris_payload")

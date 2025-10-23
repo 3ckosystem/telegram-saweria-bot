@@ -67,11 +67,9 @@ def _storage_list_invoices(limit: int = 20) -> List[Dict[str, Any]]:
 
 # ---------- API yang dipakai main.py ----------
 async def create_invoice(user_id: int, groups: List[str], amount: int, message: str = "") -> Dict[str, Any]:
-    inv = _storage_create_invoice(user_id, groups, amount)  # message handled at QR time  # <— simpan di DB/in-memory
-
-    # jika kamu ada proses ambil QR HD di background, teruskan juga message ke fetcher:
-    # asyncio.create_task(_bg_fetch_qr_hd(inv["invoice_id"], message))
-
+    inv = _storage_create_invoice(user_id, groups, amount)
+    # Prewarm QR HD, konsisten pakai INV:<invoice_id>
+    asyncio.create_task(_bg_generate_qr(inv["invoice_id"], amount))
     return inv
 
 
