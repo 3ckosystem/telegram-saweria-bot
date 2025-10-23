@@ -300,7 +300,7 @@ async def qr_png(
 # --- sampai sini ---
 
 
-# ------------- SAWERIA WEBHOOK (robust) -------------
+# ------------- SAWERIA WEBHOOK (robust & no-500) -------------
 class SaweriaWebhookIn(BaseModel):
     status: str
     invoice_id: Optional[str] = None
@@ -309,9 +309,7 @@ class SaweriaWebhookIn(BaseModel):
 
 SAWERIA_WEBHOOK_SECRET = os.getenv("SAWERIA_WEBHOOK_SECRET", "")
 
-_UUID_RE = re.compile(
-    r"(?i)\bINV:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b"
-)
+_UUID_RE = re.compile(r"(?i)\bINV:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b")
 
 def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
     if not SAWERIA_WEBHOOK_SECRET:
@@ -326,22 +324,22 @@ def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
 async def saweria_webhook(request: Request):
     raw = await request.body()
     if not _verify_saweria_signature(request, raw):
-        raise HTTPException(403, "Bad signature")
+        # jangan 500, kasih alasan
+        return JSONResponse({"ok": False, "reason": "bad signature"}, status_code=403)
 
-    # parse aman (tanpa merobohkan server)
+    # parse body tahan banting
     try:
         data = SaweriaWebhookIn.model_validate_json(raw)  # pydantic v2
     except Exception:
         try:
             data = SaweriaWebhookIn(**(json.loads(raw.decode() or "{}")))
         except Exception as e:
-            # body tidak valid → balas 200 agar Saweria tidak retry terus
             return {"ok": False, "reason": f"bad json: {e.__class__.__name__}"}
 
     if (data.status or "").lower() != "paid":
         return {"ok": True, "ignored": True}
 
-    # Cari invoice_id kandidat
+    # cari kandidat invoice id
     candidate_id = (data.invoice_id or "").strip()
     if not candidate_id and data.external_id:
         candidate_id = str(data.external_id).strip()
@@ -351,23 +349,20 @@ async def saweria_webhook(request: Request):
             candidate_id = m.group(1)
 
     if not candidate_id:
-        # Tidak ada ID yang bisa dipetakan — kembalikan ok supaya Saweria tidak spam retry
         return {"ok": False, "reason": "no invoice id in payload"}
 
-    # Tandai paid dan ambil invoice
+    # tandai paid + ambil invoice tanpa memicu 500
     try:
         inv = payments.mark_paid(candidate_id)
     except Exception as e:
-        # jangan 500: jelaskan kenapa gagal
         return {"ok": False, "reason": f"mark_paid error: {e.__class__.__name__}"}
 
     if not inv:
         inv = payments.get_invoice(candidate_id)
     if not inv:
-        # balas 200 dengan alasan; Saweria tidak perlu retry selamanya
         return {"ok": False, "reason": "invoice not found", "invoice_id": candidate_id}
 
-    # Kirim undangan
+    # kirim undangan
     try:
         groups = json.loads(inv.get("groups_json") or "[]")
     except Exception:
