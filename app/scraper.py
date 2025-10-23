@@ -39,6 +39,9 @@ FORCE_DISPATCH = True
 _PLAY = None
 _BROWSER = None
 
+# Pola UUID (invoice id)
+_UUID_RE = re.compile(r"(?i)\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b")
+
 
 async def _get_browser():
     """Start playwright+browser sekali, reuse di panggilan berikutnya."""
@@ -124,8 +127,7 @@ async def _maybe_dispatch(page: Page, handle):
         pass
 
 
-# ---------- helpers tambahan (baru/ditingkatkan) ----------
-
+# ---------- helpers tambahan ----------
 async def _set_input_and_commit(locator, value: str):
     """Isi input secara 'ramah React' + trigger event."""
     try:
@@ -133,7 +135,6 @@ async def _set_input_and_commit(locator, value: str):
     except Exception:
         try:
             await locator.click()
-            # clear manual
             try:
                 await locator.press("Control+A")
             except Exception:
@@ -151,10 +152,6 @@ async def _set_input_and_commit(locator, value: str):
 
 
 async def _wait_total_updated(page: Page, timeout_ms: int) -> bool:
-    """
-    Menunggu sampai teks 'Total: Rp...' muncul dan bernilai > 0.
-    Menggunakan scan DOM fleksibel agar tahan gonta-ganti UI.
-    """
     step = 250
     rounds = max(1, timeout_ms // step)
     for _ in range(rounds):
@@ -163,7 +160,6 @@ async def _wait_total_updated(page: Page, timeout_ms: int) -> bool:
                 """
                 () => {
                   const nodes = Array.from(document.querySelectorAll('*'));
-                  // cari node yang mengandung kata 'Total: Rp'
                   const target = nodes.find(n => /Total\\s*:\\s*Rp/i.test(n.textContent||''));
                   if (!target) return false;
                   const txt = (target.textContent||'').replace(/\\s+/g,' ');
@@ -183,7 +179,6 @@ async def _wait_total_updated(page: Page, timeout_ms: int) -> bool:
 
 
 async def _wait_qr_ready(node: Page | Frame, timeout_ms: int):
-    """Tunggu elemen QR (img/canvas/data-url/lazy) muncul dengan ukuran memadai."""
     sels = [
         'img[alt*="QR" i]',
         'img[src^="data:image"]',
@@ -206,7 +201,6 @@ async def _wait_qr_ready(node: Page | Frame, timeout_ms: int):
                         return loc.first()
             except Exception:
                 pass
-        # pancing lazy-load
         try:
             if hasattr(node, "mouse"):
                 await node.mouse.wheel(0, 400)  # type: ignore
@@ -218,7 +212,6 @@ async def _wait_qr_ready(node: Page | Frame, timeout_ms: int):
 
 # ---------- helper: pilih GoPay & tunggu Total > 0 ----------
 async def _select_gopay_and_wait_total(page: Page, amount: int):
-    """Klik GoPay dan tahan sampai 'Total' > 0, dengan recovery aktif jika gagal."""
     gopay_selectors = [
         '[data-testid="gopay-button"]',
         'button[data-testid="gopay-button"]',
@@ -226,13 +219,12 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
         '[role="radio"]:has-text("GoPay")',
         '[data-testid*="gopay"]',
     ]
-    alt_method_selectors = [  # untuk toggle memicu re-calc
+    alt_method_selectors = [
         'button:has-text("OVO")',
         'button:has-text("QRIS")',
         '[data-testid*="qris"]',
     ]
 
-    # 1) klik GoPay (pertama)
     clicked = False
     for sel in gopay_selectors:
         try:
@@ -249,7 +241,6 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
 
     await page.wait_for_timeout(200)
 
-    # 2) pastikan amount tercermin
     try:
         rupiah = f"{amount:,}".replace(",", ".")
         await page.get_by_text(re.compile(rf"(Jumlah Dukungan|Subtotal).*Rp\s*{rupiah}\b", re.I)).wait_for(timeout=3500)
@@ -257,13 +248,11 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
     except Exception:
         print("[scraper] INFO: amount reflection not found; will rely on total scanner")
 
-    # 3) tunggu total > 0, dengan recovery langkah demi langkah
     if await _wait_total_updated(page, WAIT_TOTAL_MS):
         print("[scraper] Total > 0 (OK)")
         return
 
     print("[scraper] WARN: Total still 0 → recovery: retype amount & dispatch")
-    # retype amount
     amount_input = None
     for sel in [
         'input[placeholder*="Ketik jumlah" i]',
@@ -288,7 +277,6 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
             return
 
     print("[scraper] INFO: toggle payment method to force re-calc")
-    # 4) toggle OVO/QRIS lalu balik ke GoPay
     toggled = False
     for alt in alt_method_selectors:
         try:
@@ -301,7 +289,6 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
         except Exception:
             pass
 
-    # klik GoPay lagi
     for sel in gopay_selectors:
         try:
             el = page.locator(sel)
@@ -386,6 +373,13 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
     await page.wait_for_timeout(150)
 
     # ===== message (Pesan) — INPUT/TEXTAREA =====
+    # NORMALISASI -> pastikan format jadi "INV:<uuid>" bila memungkinkan
+    norm = (message or "").strip()
+    if not norm.upper().startswith("INV:"):
+        m = _UUID_RE.search(norm)
+        if m:
+            norm = f"INV:{m.group(1)}"
+        # jika tidak ada UUID, pakai norm apa adanya (fallback)
     msg_ok = False
     for sel in [
         'input[name="message"]',
@@ -399,10 +393,10 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
         try:
             el = await page.wait_for_selector(sel, timeout=1800)
             await el.scroll_into_view_if_needed()
-            await el.fill(message)
+            await el.fill(norm)
             await _maybe_dispatch(page, el)
             msg_ok = True
-            print("[scraper] filled message via", sel)
+            print("[scraper] filled message via", sel, "=>", norm[:64])
             break
         except Exception:
             pass
@@ -423,7 +417,6 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
 
     # ===== pilih metode (GoPay) =====
     if (method or "gopay").lower() == "gopay":
-        # scroll ke area metode (biar visible)
         try:
             area = await page.get_by_text(
                 re.compile("Moda pembayaran|Metode pembayaran|GoPay|QRIS", re.I)
@@ -441,18 +434,12 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
 
 # ====== Klik DONATE + ambil target checkout ======
 async def _click_donate_and_get_checkout_page(page: Page, context):
-    """
-    Klik "Kirim Dukungan" dan kembalikan object 'target' berisi:
-    - page   : Page (jika membuka tab baru / same-page nav)
-    - frame  : Frame (jika pembayaran di dalam iframe)
-    """
     donate_selectors = [
         'button[data-testid="donate-button"]',
         'button:has-text("Kirim Dukungan")',
         'text=/\\bKirim\\s+Dukungan\\b/i',
     ]
 
-    # siapkan listener tab baru (kalau ada)
     new_page_task = context.wait_for_event("page")
 
     clicked = False
@@ -469,7 +456,6 @@ async def _click_donate_and_get_checkout_page(page: Page, context):
     if not clicked:
         raise RuntimeError("Tombol 'Kirim Dukungan' tidak ditemukan")
 
-    # 1) tab baru?
     target_page = None
     try:
         target_page = await new_page_task
@@ -481,7 +467,6 @@ async def _click_donate_and_get_checkout_page(page: Page, context):
         print("[scraper] checkout opened in NEW TAB:", target_page.url)
         return {"page": target_page, "frame": None}
 
-    # 2) same-page navigation?
     try:
         await page.wait_for_load_state("networkidle", timeout=7000)
         print("[scraper] checkout likely SAME PAGE:", page.url)
@@ -489,7 +474,6 @@ async def _click_donate_and_get_checkout_page(page: Page, context):
     except Exception:
         pass
 
-    # 3) iframe?
     for fr in page.frames:
         u = (fr.url or "").lower()
         if any(k in u for k in ["gopay", "qris", "xendit", "midtrans", "snap", "checkout", "pay"]):
@@ -501,9 +485,7 @@ async def _click_donate_and_get_checkout_page(page: Page, context):
 
 
 async def _find_qr_or_checkout_panel(node: Page | Frame):
-    """Cari elemen QR / panel checkout untuk discreenshot."""
     selectors = [
-        # gambar/canvas QR umum
         'img.qr-image',
         'img.qr-image--with-wrapper',
         'img[alt*="qr-code" i]',
@@ -512,7 +494,6 @@ async def _find_qr_or_checkout_panel(node: Page | Frame):
         '[class*="qrcode" i] img',
         'img[alt*="QRIS" i]',
         "canvas",
-        # panel pembayaran
         '[data-testid*="checkout" i]',
         '[class*="checkout" i]',
         'div:has-text("Cek status")',
@@ -538,7 +519,6 @@ async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
         return None
 
-    # Lakukan beberapa attempt agar stabil saat UI lambat
     for attempt in range(1, MAX_RETRY + 1):
         context = await _new_context()
         page = await context.new_page()
@@ -550,14 +530,11 @@ async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
 
             await _fill_without_submit(page, amount, message, "gopay")
 
-            # klik "Kirim Dukungan" -> checkout target
             target = await _click_donate_and_get_checkout_page(page, context)
             node: Page | Frame = target["frame"] if target["frame"] else (target["page"] or page)
 
-            # QR sel
             qr_handle = await _wait_qr_ready(node, WAIT_QR_MS)
             if not qr_handle:
-                # scroll lagi untuk memicu lazy-load, lalu coba sekali lagi
                 try:
                     if hasattr(node, "mouse"):
                         await node.mouse.wheel(0, 800)  # type: ignore
@@ -615,13 +592,11 @@ async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
                 except Exception as e:
                     print("[scraper] WARN: fetch img error:", e)
 
-                # fallback: screenshot elemen
                 await qr_handle.scroll_into_view_if_needed()
                 png = await qr_handle.screenshot()
                 await context.close()
                 return png
 
-            # non-IMG (canvas/dll) → screenshot
             await qr_handle.scroll_into_view_if_needed()
             png = await qr_handle.screenshot()
             await context.close()
@@ -637,16 +612,13 @@ async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
             await context.close()
             if attempt >= MAX_RETRY:
                 return None
-            await asyncio.sleep(0.6 * attempt)  # backoff ringan
+            await asyncio.sleep(0.6 * attempt)
 
     return None
 
 
 # ---------- entrypoints tambahan (opsional / debugging) ----------
 async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay") -> Optional[bytes]:
-    """
-    TANPA submit: isi form + pilih GoPay → screenshot panel/halaman (untuk debugging).
-    """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
         return None
@@ -691,9 +663,6 @@ async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay
 
 
 async def fetch_gopay_checkout_png(amount: int, message: str) -> Optional[bytes]:
-    """
-    Klik 'Kirim Dukungan' dan screenshot panel checkout (jika butuh tampilan penuh).
-    """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
         return None
@@ -716,7 +685,6 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> Optional[bytes]
             png = await el.screenshot()
             print("[scraper] captured CHECKOUT panel PNG:", len(png))
         else:
-            # fallback screenshot halaman
             if target["page"]:
                 png = await target["page"].screenshot(full_page=True)
             else:
