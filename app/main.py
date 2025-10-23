@@ -485,6 +485,24 @@ async def debug_saweria_qr_hd(amount: int = 25000, msg: str = "INV:qr-hd"):
         raise HTTPException(500, "Gagal ambil QR HD")
     return Response(content=png, media_type="image/png")
 
+# ---- ADMIN: resolve chat id/username (aman untuk prod, dilindungi secret) ----
+@app.get("/admin/resolve-chat")
+async def admin_resolve_chat(q: str, secret: str = Query(..., description="must match WEBHOOK_SECRET")):
+    if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        chat = await bot_app.bot.get_chat(q)
+        return {
+            "ok": True,
+            "input": q,
+            "resolved_id": chat.id,
+            "title": getattr(chat, "title", None),
+            "username": getattr(chat, "username", None),
+            "type": chat.type,
+        }
+    except Exception as e:
+        return {"ok": False, "input": q, "error": str(e)}
+
 # ------------- STARTUP / SHUTDOWN -------------
 @app.on_event("startup")
 async def on_start():
