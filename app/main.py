@@ -85,6 +85,48 @@ def _safe_invite_log(invoice_id: str, group_id: str, invite_link: Optional[str],
     except Exception as e:
         # Jangan pernah jatuhkan request hanya karena gagal catat log
         print(f"[invite_log][skip] inv={invoice_id} gid={group_id} err={e}")
+# --- common handler supaya 1 logic dipakai di 2 path ---
+async def _handle_saweria_webhook(request: Request):
+    data = await request.json()
+    status = (data.get("status") or data.get("event") or "").upper()
+    note = (
+        data.get("message")
+        or data.get("note")
+        or data.get("msg")
+        or data.get("payload")
+        or ""
+    )
+
+    # cari "INV:<uuid>"
+    m = re.search(r"INV:([0-9a-fA-F\-]{36})", str(note))
+    if not m:
+        return JSONResponse({"ok": True, "skip": "no-invoice-id"}, status_code=200)
+
+    invoice_id = m.group(1)
+
+    if status not in ("PAID", "SETTLEMENT"):
+        return JSONResponse({"ok": True, "skip": f"status {status}"}, status_code=200)
+
+    inv = payments.mark_paid(invoice_id)
+    if not inv:
+        inv = payments.get_invoice(invoice_id)
+
+    if inv:
+        try:
+            await _send_invites_for_invoice(inv)
+        except Exception as e:
+            print("[webhook][send_invite][error]:", repr(e))
+
+    return JSONResponse({"ok": True}, status_code=200)
+
+# --- tambahkan KEDUA route berikut (alias) ---
+@app.post("/webhook/saweria")
+async def saweria_webhook_v1(request: Request):
+    return await _handle_saweria_webhook(request)
+
+@app.post("/api/saweria/webhook")
+async def saweria_webhook_v2(request: Request):
+    return await _handle_saweria_webhook(request)
 
 # >>> ADD: helper kirim undangan (idempotent-ish)
 async def _send_invites_for_invoice(inv: dict) -> None:
@@ -339,6 +381,7 @@ def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
     return hmac.compare_digest(calc, sig_hdr)
 
 # ------------- WEBHOOK: Saweria / Gateway -------------
+# ------------- WEBHOOK: Saweria / Gateway -------------
 @app.post("/webhook/saweria")
 async def saweria_webhook(request: Request):
     # (opsional) verifikasi HMAC di sini jika kamu pakai signature
@@ -380,6 +423,7 @@ async def saweria_webhook(request: Request):
             print("[webhook][send_invite][error]:", repr(e))
 
     return JSONResponse({"ok": True}, status_code=200)
+
 
 # >>> ADD: endpoint manual trigger kirim undangan (untuk debug)
 @app.post("/api/invoice/{invoice_id}/send-invites")
