@@ -67,18 +67,30 @@ def _storage_list_invoices(limit: int = 20) -> List[Dict[str, Any]]:
 
 # ---------- API yang dipakai main.py ----------
 async def create_invoice(user_id: int, groups: list[str], amount: int) -> dict:
-    invoice_id = str(uuid.uuid4())
-    inv = {
-        "invoice_id": invoice_id,
-        "user_id": user_id,
-        "amount": int(amount),
-        "status": "PENDING",
-        "groups_json": json.dumps([str(g) for g in groups], ensure_ascii=False),
-        "created_at": int(time.time()),
-        "qris_payload": None,
-    }
-    storage.create_invoice(inv)
+    """
+    Buat invoice baru dan kembalikan dict invoice dari storage.
+    Storage.create_invoice DIHARAPKAN memiliki signature (user_id, groups, amount)
+    dan mengembalikan dict yang minimal berisi: invoice_id, user_id, amount, status,
+    serta groups (list) ATAU groups_json (string JSON).
+    """
+    # normalisasi input
+    uid = int(user_id)
+    grp = [str(g) for g in (groups or [])]
+    amt = int(amount)
+
+    inv = storage.create_invoice(uid, grp, amt)  # <<-- PERBAIKAN UTAMA
+
+    # Pastikan ada fallback field yang dipakai layer lain
+    # (main.py membaca inv.get("groups") ATAU groups_json)
+    if "groups" not in inv and "groups_json" not in inv:
+        inv["groups"] = grp
+    if "amount" not in inv:
+        inv["amount"] = amt
+    if "status" not in inv:
+        inv["status"] = "PENDING"
+
     return inv
+
 
 
 
