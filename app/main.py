@@ -22,22 +22,54 @@ from .scraper import (
 )
 
 # ------------- ENV -------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = (os.getenv("BASE_URL") or "").strip()
-if not BOT_TOKEN or not BASE_URL:
-    raise RuntimeError("Missing required env: BOT_TOKEN or BASE_URL")
-
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+BASE_URL = os.environ["BASE_URL"].strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
-ENV = os.getenv("ENV", "dev")  # set "prod" di Railway untuk mematikan debug endpoints
+ENV = os.getenv("ENV", "dev")  # "prod" di Railway untuk mematikan debug endpoints
 
-GROUPS_ENV = os.environ.get("GROUP_IDS_JSON", "[]")
+# Robust reader utk GROUP_IDS_JSON & PRICE_IDR
+def _read_env_json(name: str, default_text: str = "[]"):
+    raw = os.environ.get(name, default_text)
+    if raw is None:
+        return []
+    s = raw.strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        # fallback jika ada single quotes
+        try:
+            return json.loads(s.replace("'", '"'))
+        except Exception:
+            return []
+
+def _parse_groups_from_any(data):
+    groups = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            groups.append({"id": str(k), "name": str(v)})
+    elif isinstance(data, list):
+        for it in data:
+            if isinstance(it, dict):
+                gid = str(it.get("id") or it.get("group_id") or it.get("value") or "").strip()
+                nm  = str(it.get("name") or it.get("label")    or it.get("text")  or "").strip()
+                init = str(it.get("initial") or "").strip()
+                if gid and nm:
+                    groups.append({"id": gid, "name": nm, "initial": init})
+            else:
+                gid = str(it).strip()
+                if gid:
+                    groups.append({"id": gid, "name": gid})
+    return groups
+
+# BACA ENV SEKARANG (module scope)
+GROUPS_DATA = _read_env_json("GROUP_IDS_JSON", "[]")
+GROUPS = _parse_groups_from_any(GROUPS_DATA)
+
 try:
-    GROUPS: List[str] = [
-        (g["id"] if isinstance(g, dict) and "id" in g else str(g))
-        for g in json.loads(GROUPS_ENV)
-    ]
+    PRICE_IDR = int(os.environ.get("PRICE_IDR", "25000"))
 except Exception:
-    GROUPS = []
+    PRICE_IDR = 25000
+
 
 # ------------- APP & BOT -------------
 app = FastAPI()
@@ -45,6 +77,36 @@ storage.init_db()
 
 bot_app: Application = build_app()
 register_handlers(bot_app)
+
+# >>> ADD: helper kirim undangan (idempotent-ish)
+async def _send_invites_for_invoice(inv: dict) -> None:
+    """
+    Kirim undangan ke semua grup pada invoice.
+    Aman dipanggil berulang karena kita cek log yang sudah pernah terkirim.
+    """
+    try:
+        groups = json.loads(inv.get("groups_json") or "[]")
+    except Exception:
+        groups = []
+    if not groups:
+        return
+
+    logs = storage.list_invite_logs(inv["invoice_id"])
+    # anggap sudah terkirim jika ada invite_link atau string "(sent" pada kolom invite_link
+    already = {
+        l.get("group_id")
+        for l in logs
+        if l.get("invite_link") or "(sent" in (l.get("invite_link") or "")
+    }
+
+    for gid in groups:
+        if gid in already:
+            continue
+        try:
+            await send_invite_link(bot_app, inv["user_id"], gid)
+            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-status)", None)
+        except Exception as e:
+            storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
 
 # Serve Mini App statics
 app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
@@ -61,46 +123,82 @@ async def telegram_webhook(request: Request):
     await bot_app.process_update(update)
     return JSONResponse({"ok": True})
 
-# ------------- MODELS -------------
+
+# ------------- API: CREATE INVOICE -------------
 class CreateInvoiceIn(BaseModel):
     user_id: int
     groups: List[str]
     amount: int
 
-# ------------- API: CREATE INVOICE -------------
 @app.post("/api/invoice")
 async def create_invoice(payload: CreateInvoiceIn):
-    # validasi group id terhadap ENV (opsional, aman jika kosong)
-    valid = set(GROUPS) if GROUPS else None
-    if valid:
-        allowed = {g["id"] for g in GROUPS}
+    # --- DEBUG LOG (bisa hapus setelah stabil)
+    import logging, json as _json
+    logging.info(f"[create_invoice] uid={payload.user_id} groups={payload.groups} amount={payload.amount}")
+
+    # --- VALIDASI amount (minimal>0; boleh set MIN_PRICE_IDR di env)
+    try:
+        MIN_PRICE_IDR = int(os.environ.get("MIN_PRICE_IDR", "1"))
+    except Exception:
+        MIN_PRICE_IDR = 1
+    if not isinstance(payload.amount, int) or payload.amount < MIN_PRICE_IDR:
+        raise HTTPException(400, f"Invalid amount. Min {MIN_PRICE_IDR}")
+
+    # --- VALIDASI groups dari ENV (id harus match)
+    try:
+        allowed = {str(g["id"]) for g in GROUPS}
+    except Exception:
+        allowed = set()
     for gid in payload.groups:
-        if gid not in allowed:
-            raise HTTPException(400, f"Invalid group {gid}")
+        if str(gid) not in allowed:
+            # kasih tahu id yang valid untuk debug cepat
+            raise HTTPException(400, f"Invalid group {gid}. Allowed={list(allowed)[:5]}...")
 
-    # trigger invoice + background capture (via payments)
-    inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
-    return inv
+    # --- CALL payments.create_invoice dengan proteksi error
+    try:
+        inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
+        # bentuk response minimal agar UI jalan
+        return inv  # biasanya: {"invoice_id": "...", "status": "PENDING", "qr_url": "...", ...}
+    except Exception as e:
+        # log stacktrace biar kelihatan jelas di Railway logs
+        import traceback, logging
+        logging.error("create_invoice failed: %s", e)
+        logging.error(traceback.format_exc())
+        # balas 400 ke UI agar tampil pesan manusiawi, bukan 500
+        raise HTTPException(400, f"Create invoice error: {e}")
 
 
-# ------------- API: CONFIG (price + groups) -------------
+# ------------- API: CONFIG -------------
 @app.get("/api/config")
 def get_config():
-    return {"price_idr": PRICE_IDR, "groups": GROUPS}
+    try:
+        return {"price_idr": PRICE_IDR, "groups": GROUPS}
+    except Exception:
+        return {"price_idr": 25000, "groups": []}
 
-# (compat) simple groups list
-@app.get("/api/groups")
-def get_groups():
-    return {"groups": GROUPS, "price_idr": PRICE_IDR}
+
 
 # ------------- API: STATUS & QR IMAGE -------------
 _DATA_URL_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$")
 
 @app.get("/api/invoice/{invoice_id}/status")
-def invoice_status(invoice_id: str):
+async def invoice_status(invoice_id: str):
     st = payments.get_status(invoice_id)
     if not st:
         raise HTTPException(404, "Invoice not found")
+
+    # >>> ADD: fallback auto-kirim undangan saat status sudah PAID
+    try:
+        if (st.get("status") or "").upper() == "PAID":
+            logs = storage.list_invite_logs(invoice_id)
+            if not logs:
+                inv = payments.get_invoice(invoice_id)  # berisi user_id & groups_json
+                if inv:
+                    await _send_invites_for_invoice(inv)
+    except Exception as e:
+        # jangan gagalkan response status hanya karena fallback gagal
+        print("[invoice_status] auto-send invites failed:", e)
+
     # contoh balikan: {"status":"PENDING"|"PAID","paid_at":..., "has_qr": true|false}
     return st
 
@@ -133,7 +231,20 @@ async def qr_png(
 
     # siapkan nilai umum
     amt = inv.get("amount") or amount or 0
-    message = f"INV:{invoice_id}"
+    # Build message from GROUPS initial based on groups_json in invoice
+    try:
+        id_to_initial = {str(g["id"]): str(g.get("initial","")).strip() for g in GROUPS}
+    except Exception:
+        id_to_initial = {}
+    try:
+        import json as _json
+        inv_groups = inv.get("groups") or _json.loads(inv.get("groups_json") or "[]")
+    except Exception:
+        inv_groups = []
+    initials = [id_to_initial.get(str(g), "") for g in inv_groups]
+    # join dengan spasi (mis. "M A S")
+    message = " ".join([s.strip() for s in initials if s.strip()]) or f"INV:{invoice_id}"
+
 
     # 3) Jika sudah ada payload di DB → langsung kirim
     payload = inv.get("qris_payload")
@@ -213,6 +324,7 @@ async def saweria_webhook(request: Request):
     raw = await request.body()
     if not _verify_saweria_signature(request, raw):
         raise HTTPException(403, "Bad signature")
+    # Tetap pakai yang sudah berjalan di environment kamu:
     data = SaweriaWebhookIn.model_validate_json(raw)
     if data.status.lower() != "paid":
         return {"ok": True}
@@ -233,6 +345,18 @@ async def saweria_webhook(request: Request):
         except Exception as e:
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
     return {"ok": True}
+
+# >>> ADD: endpoint manual trigger kirim undangan (untuk debug)
+@app.post("/api/invoice/{invoice_id}/send-invites")
+async def manual_send_invites(invoice_id: str, secret: Optional[str] = Query(None)):
+    # lindungi pakai WEBHOOK_SECRET (Telegram webhook secret) biar tidak disalahgunakan
+    if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
+        raise HTTPException(403, "Forbidden")
+    inv = payments.get_invoice(invoice_id)  # ambil dari layer payments biar konsisten
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    await _send_invites_for_invoice(inv)
+    return {"ok": True, "invoice_id": invoice_id, "logs": storage.list_invite_logs(invoice_id)}
 
 # ------------- HEALTH / DEBUG -------------
 @app.get("/health")
