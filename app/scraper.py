@@ -14,10 +14,9 @@
 # ------------------------------------------------------------
 
 from __future__ import annotations
-import os, re, uuid, base64
+import os, re, uuid, base64, asyncio
 from typing import Optional
 from urllib.parse import urljoin
-
 from playwright.async_api import async_playwright, Page, Frame, Error as PWError
 
 SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "").strip()

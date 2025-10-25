@@ -319,32 +319,69 @@ def _verify_saweria_signature(req: Request, raw_body: bytes) -> bool:
     calc = hmac.new(SAWERIA_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(calc, sig_hdr)
 
+INV_RE = re.compile(r"(?:^|\\b)INV[:\\s]*([0-9a-fA-F-]{36})\\b")
+
 @app.post("/api/saweria/webhook")
 async def saweria_webhook(request: Request):
     raw = await request.body()
+
+    # 1) Optional HMAC verify (X-Saweria-Signature)
     if not _verify_saweria_signature(request, raw):
         raise HTTPException(403, "Bad signature")
-    # Tetap pakai yang sudah berjalan di environment kamu:
-    data = SaweriaWebhookIn.model_validate_json(raw)
-    if data.status.lower() != "paid":
-        return {"ok": True}
 
-    # tandai invoice paid (gunakan message atau external_id/invoice_id sesuai implementasi kamu)
-    inv = None
-    if data.invoice_id:
-        inv = payments.mark_paid(data.invoice_id)
+    # 2) Parse JSON
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+
+    # 3) Support 2 styles of payload:
+    #    A) Minimal: {"status":"paid","invoice_id":"..."}
+    #    B) Saweria donation payload: {"type":"donation", "message":"INV:<uuid>", ...}
+    invoice_id = None
+    is_paid = False
+
+    # Style A
+    status = str(data.get("status", "")).lower()
+    if status == "paid":
+        is_paid = True
+        invoice_id = data.get("invoice_id") or data.get("external_id")
+
+    # Style B (Saweria)
+    if not is_paid and str(data.get("type", "")).lower() == "donation":
+        # Anggap donasi sukses = paid; ambil invoice dari message
+        is_paid = True
+        msg = str(data.get("message", ""))
+        m = INV_RE.search(msg)
+        if m:
+            invoice_id = m.group(1)
+
+    if not is_paid:
+        # Biar idempotent: kalau bukan PAID/Donation kita abaikan saja
+        return {"ok": True, "ignored": True}
+
+    if not invoice_id:
+        raise HTTPException(400, "Cannot resolve invoice_id from payload")
+
+    # 4) Tandai PAID dan kirim undangan
+    inv = payments.mark_paid(invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
 
-    # kirim undangan ke semua grup terkait
-    groups = json.loads(inv["groups_json"])
+    try:
+        groups = json.loads(inv.get("groups_json") or "[]")
+    except Exception:
+        groups = []
+
     for gid in groups:
         try:
             await send_invite_link(bot_app, inv["user_id"], gid)
-            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-bot)", None)
+            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-webhook)", None)
         except Exception as e:
             storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
+
     return {"ok": True}
+
 
 # >>> ADD: endpoint manual trigger kirim undangan (untuk debug)
 @app.post("/api/invoice/{invoice_id}/send-invites")
