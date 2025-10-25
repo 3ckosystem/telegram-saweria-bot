@@ -13,31 +13,30 @@ async function loadConfigAndRender() {
     const cfg = await r.json();
     PRICE_PER_GROUP = parseInt(cfg?.price_idr ?? '25000', 10) || 25000;
     LOADED_GROUPS = Array.isArray(cfg?.groups) ? cfg.groups : [];
+
     const box = document.getElementById('groups');
     if (box) {
       box.innerHTML = '';
-      // saat render dari cfg.groups:
       (LOADED_GROUPS || []).forEach(g => {
         const id = String(g.id);
         const name = String(g.name ?? id);
-        const initial = String(g.initial ?? "").trim();  // <— ambil initial
+        const initial = String(g.initial ?? "").trim(); // tetap disimpan hanya untuk tampilan
 
         const row = document.createElement('label');
         row.style.display = 'block';
-        row.innerHTML = `<input type="checkbox" value="${id}" data-initial="${initial}"/> ${name}`;
+        row.innerHTML = `<input type="checkbox" value="${id}" data-initial="${initial}"/> ${htmlEscape(name)}`;
         box.appendChild(row);
       });
-
     }
+
     // trigger recalc & sync after rendering
-    setTimeout(() => { recalcAmountFromGroups?.(); syncTotalText?.(); }, 0);
-  } catch (_) {
+    setTimeout(() => { recalcAmountFromGroups(); syncTotalText(); syncInitialPreview(); }, 0);
+  } catch {
     // fallback: nothing
   }
 }
 
 document.addEventListener('DOMContentLoaded', loadConfigAndRender);
-
 
 // (opsional) link bantu
 const yourSaweriaUrl = "https://saweria.co/payments";
@@ -55,25 +54,6 @@ function htmlEscape(s) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[c]));
 }
-
-// ------- render daftar grup (boleh di-inject dari server lewat window.injectedGroups) ------
-async function renderGroups() {
-  const groups = (window.injectedGroups || [
-    { id: "-1002593237267", label: "Group Model" },
-    { id: "-1001320707949", label: "Group A" },
-    { id: "-1002306015599", label: "Group S" },
-  ]);
-  const wrap = document.getElementById("groups");
-  if (!wrap) return;
-  wrap.innerHTML = "";
-  groups.forEach((g, idx) => {
-    const el = document.createElement("label");
-    el.style.display = "block";
-    el.innerHTML = `<input type="checkbox" ${idx===0 ? "checked" : ""} value="${g.id}"/> ${htmlEscape(g.label)}`;
-    wrap.appendChild(el);
-  });
-}
-renderGroups();
 
 // ------------- aksi bayar ----------------
 document.getElementById("pay")?.addEventListener("click", onPay);
@@ -102,7 +82,7 @@ async function onPay() {
       body: JSON.stringify({ user_id: userId, groups: selected, amount }),
     });
     if (!res.ok) throw new Error(await res.text());
-    inv = await res.json(); // { invoice_id: "..." }
+    inv = await res.json(); // { invoice_id: "..." , ... }
   } catch (e) {
     qrContainer.innerHTML =
       `<div style="color:#c00">Create invoice gagal: ${htmlEscape(e.message || String(e))}</div>`;
@@ -111,7 +91,8 @@ async function onPay() {
 
   // 2) Susun tampilan + QR IMG LANGSUNG
   const ref = `INV:${inv.invoice_id}`;
-  const qrPngUrl = `${window.location.origin}/api/qr/${inv.invoice_id}.png?amount=${amount}&msg=${encodeURIComponent(ref)}`;
+  // ⬇️ TIDAK ada &msg= lagi — backend/scraper memaksa message=INV:<invoice_id>
+  const qrPngUrl = `${window.location.origin}/api/qr/${inv.invoice_id}.png?amount=${amount}`;
 
   qrContainer.innerHTML = `
     <div><b>Pembayaran GoPay</b></div>
@@ -119,13 +100,14 @@ async function onPay() {
 
     <div id="qrwrap" style="margin-bottom:8px"></div>
 
-    <div style="margin-top:8px"><b>Kode pembayaran:</b> <code id="invcode">${htmlEscape(ref)}</code>
+    <div style="margin-top:8px">
+      <b>Kode pembayaran:</b> <code id="invcode">${htmlEscape(ref)}</code>
       <button id="copyinv" style="margin-left:6px">Copy</button>
     </div>
     <ol style="margin-top:8px;padding-left:18px">
       <li>Jika perlu, buka: <a href="${yourSaweriaUrl}" target="_blank" rel="noopener">${yourSaweriaUrl}</a></li>
-      <li>Tempel kode <b>${htmlEscape(ref)}</b> di kolom <i>pesan</i> sebelum bayar (opsional bila scan QR).</li>
-      <li>Setelah bayar, Mini App menutup otomatis dan bot mengirim link undangan.</li>
+      <li>Anda bisa scan QR di atas langsung dari GoPay.</li>
+      <li>Setelah bayar, Mini App akan menutup otomatis dan bot mengirim link undangan.</li>
     </ol>
 
     <div id="wait" style="margin-top:12px">
@@ -146,7 +128,7 @@ async function onPay() {
   };
   img.onerror = () => {
     const st = document.getElementById("qruistate");
-    if (st) st.innerHTML = `<span style="color:#c00">QRIS gagal dimuat.</span> Coba buka <a href="${yourSaweriaUrl}" target="_blank" rel="noopener">Saweria</a> dan tempel kode di atas.`;
+    if (st) st.innerHTML = `<span style="color:#c00">QRIS gagal dimuat.</span> Coba buka <a href="${yourSaweriaUrl}" target="_blank" rel="noopener">Saweria</a> dan gunakan kode di atas.`;
   };
   document.getElementById("qrwrap")?.appendChild(img);
 
@@ -157,7 +139,7 @@ async function onPay() {
       const btn = document.getElementById('copyinv');
       btn.textContent = "Copied!";
       setTimeout(() => (btn.textContent = "Copy"), 1500);
-    } catch (_) {}
+    } catch {}
   });
 
   // 3) POLLING status pembayaran (auto-close saat PAID)
@@ -179,16 +161,13 @@ async function onPay() {
         const sp = document.getElementById('spinner');
         if (sp) sp.textContent = "Belum terdeteksi. Jika sudah bayar, tunggu beberapa detik…";
       }
-    } catch (_) {}
+    } catch {}
   }
 }
 
 
 // === Auto-calc total based on selected groups =====================
-// Harga per grup (IDR)
-/* PRICE_PER_GROUP moved to config */
 
-// Hitung ulang total saat user centang/menyangga pilihan
 function recalcAmountFromGroups() {
   try {
     const checked = document.querySelectorAll('#groups input[type="checkbox"]:checked');
@@ -197,22 +176,20 @@ function recalcAmountFromGroups() {
     const total = (checked?.length || 0) * PRICE_PER_GROUP;
     if (total > 0) {
       amountEl.value = String(total);
-    } else {
-      // fallback jika belum ada yang dipilih, biarkan default di input
     }
-  } catch (_) {}
+  } catch {}
 }
 
+// Preview “initials” hanya sebagai tampilan info, BUKAN pesan ke Saweria.
 function syncInitialPreview() {
   try {
     const checked = [...document.querySelectorAll('#groups input[type="checkbox"]:checked')];
     const initials = checked
       .map(i => (i.dataset.initial || "").trim())
       .filter(Boolean);
-    // Tampilkan format "M A S" — ganti join('') kalau mau "MAS"
     const msg = initials.join(' ');
     const el = document.getElementById('msg-preview');
-    if (el) el.textContent = msg ? `Pesan: ${msg}` : '';
+    if (el) el.textContent = msg ? `Grup dipilih: ${msg}` : '';
   } catch {}
 }
 
@@ -224,20 +201,20 @@ function syncInitialPreview() {
     const t = e.target;
     if (t && t.matches && t.matches('input[type="checkbox"]')) {
       recalcAmountFromGroups();
-      syncInitialPreview();        // <— tambahkan
+      syncInitialPreview();
+      setTimeout(syncTotalText, 0);
     }
   });
   setTimeout(() => { 
     recalcAmountFromGroups();
-    syncInitialPreview();          // <— tambahkan
+    syncInitialPreview();
+    syncTotalText();
   }, 0);
-
 })();
-
 
 // helper format rupiah
 function formatRupiah(n) {
-  if (!Number.isFinite(n)) return "0";
+  if (!Number.isFinite(n)) return "Rp 0";
   return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
@@ -247,11 +224,3 @@ function syncTotalText() {
   const amt = parseInt(document.getElementById('amount')?.value || '0', 10);
   if (tt) tt.textContent = formatRupiah(amt || 0);
 }
-
-// update saat user ganti pilihan grup
-document.getElementById('groups')?.addEventListener('change', () => {
-  setTimeout(syncTotalText, 0); // setelah recalcAmountFromGroups jalan
-});
-
-// set nilai awal tampilan total
-setTimeout(syncTotalText, 0);

@@ -1,7 +1,7 @@
 # app/scraper.py
 # ------------------------------------------------------------
 # Scraper Saweria:
-#  - Isi form (amount, name/email random, message)
+#  - Isi form (amount, name/email random, message=INV:<invoice_id>)
 #  - Pilih GoPay (tanpa submit) untuk bikin UI siap
 #  - Klik "Kirim Dukungan"
 #  - Ambil QR HD dari halaman/iframe checkout:
@@ -21,6 +21,7 @@ from playwright.async_api import async_playwright, Page, Frame, Error as PWError
 
 SAWERIA_USERNAME = os.getenv("SAWERIA_USERNAME", "").strip()
 PROFILE_URL = f"https://saweria.co/{SAWERIA_USERNAME}" if SAWERIA_USERNAME else None
+INV_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 # Paksa event input/change supaya binding reaktif di halaman terpicu
 FORCE_DISPATCH = True
@@ -175,8 +176,19 @@ async def _select_gopay_and_wait_total(page: Page, amount: int):
         print("[scraper] WARN: Total still 0 after selecting GoPay")
 
 
+# ---------- builder pesan INV ----------
+def _build_inv_message(invoice_id: str) -> str:
+    """
+    Bangun pesan kanonik untuk Saweria: INV:<invoice_id>.
+    Tetap paksa format INV:... meskipun bukan UUID valid (untuk amannya).
+    """
+    if not invoice_id:
+        return "INV:UNKNOWN"
+    return f"INV:{invoice_id}"
+
+
 # ---------- isi form TANPA submit ----------
-async def _fill_without_submit(page: Page, amount: int, message: str, method: str):
+async def _fill_without_submit(page: Page, amount: int, invoice_id: str, method: str):
     # ===== amount =====
     amount_ok = False
     amount_handle = None
@@ -247,7 +259,8 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
             pass
     await page.wait_for_timeout(150)
 
-    # ===== message (Pesan) — INPUT → TEXTAREA =====
+    # ===== message (Pesan) — selalu INV:<invoice_id> =====
+    message = _build_inv_message(invoice_id)
     msg_ok = False
     for sel in [
         'input[name="message"]',
@@ -264,7 +277,7 @@ async def _fill_without_submit(page: Page, amount: int, message: str, method: st
             await el.fill(message)
             await _maybe_dispatch(page, el)
             msg_ok = True
-            print("[scraper] filled message via", sel)
+            print("[scraper] filled message via", sel, "→", message)
             break
         except Exception:
             pass
@@ -390,11 +403,12 @@ async def _find_qr_or_checkout_panel(node: Page | Frame):
 
 
 # ---------- entrypoint: QR HD ----------
-async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
+async def fetch_gopay_qr_hd_png(*, invoice_id: str, amount: int) -> Optional[bytes]:
     """
     Isi form -> klik 'Kirim Dukungan' -> tunggu checkout GoPay/Midtrans
     -> ambil sumber <img> QR (HD). Fallback: screenshot elemen / panel.
     Selalu mengembalikan bytes PNG (atau None jika gagal total).
+    Pesan di field selalu INV:<invoice_id>.
     """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
@@ -416,11 +430,11 @@ async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
         ]
 
     try:
-        # 1) profil + isi form + pilih GoPay
+        # 1) profil + isi form (message=INV:<invoice_id>) + pilih GoPay
         await page.goto(PROFILE_URL, wait_until="domcontentloaded")
         await page.wait_for_timeout(600)
         await page.mouse.wheel(0, 500)
-        await _fill_without_submit(page, amount, message, "gopay")
+        await _fill_without_submit(page, amount, invoice_id, "gopay")
 
         # 2) klik "Kirim Dukungan" -> checkout target
         target = await _click_donate_and_get_checkout_page(page, context)
@@ -531,9 +545,9 @@ async def fetch_gopay_qr_hd_png(amount: int, message: str) -> Optional[bytes]:
 
 
 # ---------- entrypoints tambahan (opsional / debugging) ----------
-async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay") -> Optional[bytes]:
+async def fetch_qr_png(*, invoice_id: str, amount: int, method: Optional[str] = "gopay") -> Optional[bytes]:
     """
-    TANPA submit: isi form + pilih GoPay → screenshot panel/halaman (untuk debugging).
+    TANPA submit: isi form (message=INV:<invoice_id>) + pilih GoPay → screenshot panel/halaman (untuk debugging).
     """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
@@ -546,7 +560,7 @@ async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay
         await page.wait_for_timeout(700)
         await page.mouse.wheel(0, 480)
 
-        await _fill_without_submit(page, amount, message, method or "gopay")
+        await _fill_without_submit(page, amount, invoice_id, method or "gopay")
         await page.wait_for_timeout(700)
 
         target = page
@@ -577,9 +591,10 @@ async def fetch_qr_png(amount: int, message: str, method: Optional[str] = "gopay
         return None
 
 
-async def fetch_gopay_checkout_png(amount: int, message: str) -> Optional[bytes]:
+async def fetch_gopay_checkout_png(*, invoice_id: str, amount: int) -> Optional[bytes]:
     """
     Klik 'Kirim Dukungan' dan screenshot panel checkout (jika butuh tampilan penuh).
+    Pesan di field selalu INV:<invoice_id>.
     """
     if not PROFILE_URL:
         print("[scraper] ERROR: SAWERIA_USERNAME belum di-set")
@@ -592,7 +607,7 @@ async def fetch_gopay_checkout_png(amount: int, message: str) -> Optional[bytes]
         await page.wait_for_timeout(700)
         await page.mouse.wheel(0, 480)
 
-        await _fill_without_submit(page, amount, message, "gopay")
+        await _fill_without_submit(page, amount, invoice_id, "gopay")
         target = await _click_donate_and_get_checkout_page(page, context)
         node = target["frame"] if target["frame"] else (target["page"] or page)
 
@@ -637,7 +652,7 @@ async def debug_snapshot() -> Optional[bytes]:
     return png
 
 
-async def debug_fill_snapshot(amount: int, message: str, method: str = "gopay") -> Optional[bytes]:
+async def debug_fill_snapshot(*, invoice_id: str, amount: int, method: str = "gopay") -> Optional[bytes]:
     if not PROFILE_URL:
         print("[debug_fill_snapshot] ERROR: SAWERIA_USERNAME belum di-set")
         return None
@@ -648,7 +663,7 @@ async def debug_fill_snapshot(amount: int, message: str, method: str = "gopay") 
         await page.wait_for_timeout(700)
         await page.mouse.wheel(0, 480)
 
-        await _fill_without_submit(page, amount, message, method or "gopay")
+        await _fill_without_submit(page, amount, invoice_id, method or "gopay")
         await page.wait_for_timeout(700)
 
         png = await page.screenshot(full_page=True)
