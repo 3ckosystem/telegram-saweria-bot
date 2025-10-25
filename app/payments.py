@@ -77,7 +77,7 @@ async def create_invoice(user_id: int, groups: list[str], amount: int) -> dict:
         "created_at": int(time.time()),
         "qris_payload": None,
     }
-    storage.save_invoice(inv)   # sesuaikan dengan penyimpananmu
+    storage.create_invoice(inv)
     return inv
 
 
