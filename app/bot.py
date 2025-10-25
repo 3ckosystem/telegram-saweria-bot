@@ -133,9 +133,10 @@ async def send_invite_link(app: Application, user_id: int, target_group_id):
     try:
         await app.bot.send_message(
             chat_id=user_id,
-            text=f"✅ Pembayaran diterima.\n"
-                 f"Undangan untuk *{group_name}*:\n{invite_link_url}",
-            parse_mode="Markdown"
+            text=(
+                f"✅ Pembayaran diterima.\n"
+                f"Undangan untuk {group_name}:\n{invite_link_url}"
+            )
         )
     except Exception as e:
         print("[invite] send DM failed:", e)
