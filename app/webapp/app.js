@@ -3,6 +3,37 @@
 const tg = window.Telegram?.WebApp;
 tg?.expand();
 
+// === Load config (groups + price) from backend ===
+let PRICE_PER_GROUP = 25000;
+let LOADED_GROUPS = [];
+
+async function loadConfigAndRender() {
+  try {
+    const r = await fetch('/api/config');
+    const cfg = await r.json();
+    PRICE_PER_GROUP = parseInt(cfg?.price_idr ?? '25000', 10) || 25000;
+    LOADED_GROUPS = Array.isArray(cfg?.groups) ? cfg.groups : [];
+    const box = document.getElementById('groups');
+    if (box) {
+      box.innerHTML = '';
+      (LOADED_GROUPS || []).forEach(g => {
+        const id = String(g.id);
+        const name = String(g.name ?? id);
+        const row = document.createElement('div');
+        row.innerHTML = `<label><input type="checkbox" value="${id}"/> ${name}</label>`;
+        box.appendChild(row);
+      });
+    }
+    // trigger recalc & sync after rendering
+    setTimeout(() => { recalcAmountFromGroups?.(); syncTotalText?.(); }, 0);
+  } catch (_) {
+    // fallback: nothing
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadConfigAndRender);
+
+
 // (opsional) link bantu
 const yourSaweriaUrl = "https://saweria.co/payments";
 
@@ -150,7 +181,7 @@ async function onPay() {
 
 // === Auto-calc total based on selected groups =====================
 // Harga per grup (IDR)
-const PRICE_PER_GROUP = 25000;
+/* PRICE_PER_GROUP moved to config */
 
 // Hitung ulang total saat user centang/menyangga pilihan
 function recalcAmountFromGroups() {
@@ -181,3 +212,25 @@ function recalcAmountFromGroups() {
   // Recalc saat awal render juga (jaga-jaga jika ada default tercentang)
   setTimeout(recalcAmountFromGroups, 0);
 })();
+
+
+// helper format rupiah
+function formatRupiah(n) {
+  if (!Number.isFinite(n)) return "0";
+  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+/** sinkronkan tampilan total (Rp) dengan nilai #amount */
+function syncTotalText() {
+  const tt = document.getElementById('total-text');
+  const amt = parseInt(document.getElementById('amount')?.value || '0', 10);
+  if (tt) tt.textContent = formatRupiah(amt || 0);
+}
+
+// update saat user ganti pilihan grup
+document.getElementById('groups')?.addEventListener('change', () => {
+  setTimeout(syncTotalText, 0); // setelah recalcAmountFromGroups jalan
+});
+
+// set nilai awal tampilan total
+setTimeout(syncTotalText, 0);

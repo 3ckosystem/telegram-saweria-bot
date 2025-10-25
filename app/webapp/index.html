@@ -9,19 +9,31 @@
     body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
     #qr img { max-width: 240px; border:1px solid #eee; padding:6px; border-radius:8px }
     button { padding:8px 12px; border-radius:8px; border:1px solid #ddd; background:#f5f5f5 }
+  
+    .totalbar { position: sticky; bottom: 0; left: 0; right: 0; background:#fff;
+      border-top:1px solid #eee; padding:10px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .total-left { display:flex; flex-direction:column; line-height:1.1; }
+    .total-label { font-size:12px; color:#666; }
+    .total-value { font-weight:700; font-size:18px; }
+    .checkout-btn { padding:10px 14px; border-radius:10px; border:0; background:#0ea5e9; color:#fff; font-weight:600; }
+    body { padding-bottom: 70px; } /* space for sticky bar */
   </style>
 </head>
 <body>
   <h3>Pilih Grup</h3>
   <div id="groups"></div>
 
-  <label>Nominal (IDR): <input id="amount" type="number" value="25000"/></label>
-  <div style="margin-top:8px">
-    <button id="pay">Lanjut Pembayaran (QRIS)</button>
+  <input id="amount" type="hidden" value="25000"/>
+  <div id="totalbar" class="totalbar">
+    <div class="total-left">
+      <div class="total-label">Total</div>
+      <div class="total-value" id="total-text">Rp 25.000</div>
+    </div>
+    <button id="pay" class="checkout-btn">Checkout</button>
   </div>
 
-  <div id="qr" style="margin-top:16px;"></div>
+<div id="qr" style="margin-top:16px;"></div>
 
-  <script src="./app.js"></script>
+  <script src="./app.js?v=20251022-2"></script>
 </body>
 </html>

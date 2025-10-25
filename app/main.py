@@ -73,13 +73,25 @@ async def create_invoice(payload: CreateInvoiceIn):
     # validasi group id terhadap ENV (opsional, aman jika kosong)
     valid = set(GROUPS) if GROUPS else None
     if valid:
-        for gid in payload.groups:
-            if gid not in valid:
-                raise HTTPException(400, f"Invalid group {gid}")
+        allowed = {g["id"] for g in GROUPS}
+    for gid in payload.groups:
+        if gid not in allowed:
+            raise HTTPException(400, f"Invalid group {gid}")
 
     # trigger invoice + background capture (via payments)
     inv = await payments.create_invoice(payload.user_id, payload.groups, payload.amount)
     return inv
+
+
+# ------------- API: CONFIG (price + groups) -------------
+@app.get("/api/config")
+def get_config():
+    return {"price_idr": PRICE_IDR, "groups": GROUPS}
+
+# (compat) simple groups list
+@app.get("/api/groups")
+def get_groups():
+    return {"groups": GROUPS, "price_idr": PRICE_IDR}
 
 # ------------- API: STATUS & QR IMAGE -------------
 _DATA_URL_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$")
