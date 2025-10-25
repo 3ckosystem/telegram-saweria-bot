@@ -88,7 +88,6 @@ async def _send_invites_for_invoice(inv: dict) -> None:
     if not groups:
         return
 
-    # Ambil log existing khusus per-group
     logs = storage.list_invite_logs(inv["invoice_id"])
     already = { str(l.get("group_id")) for l in logs if l.get("group_id") }
 
@@ -96,19 +95,29 @@ async def _send_invites_for_invoice(inv: dict) -> None:
         gid_str = str(gid)
         if gid_str in already:
             continue
+
+        # normalisasi id telegram
         try:
-            gid_int = int(gid_str)           # normalisasi untuk Telegram API
+            gid_norm = int(gid_str)
         except Exception:
-            gid_int = gid_str                # fallback tetap coba string
+            gid_norm = gid_str
 
+        # kirim link
         try:
-            await send_invite_link(bot_app, inv["user_id"], gid_int)
-            storage.add_invite_log(inv["invoice_id"], gid_str, "(sent)", None)
+            await send_invite_link(bot_app, inv["user_id"], gid_norm)
+            try:
+                storage.add_invite_log(inv["invoice_id"], gid_str, "(sent)", None)
+            except Exception as e:
+                print("[invite-log] failed to insert success log:", e)
         except Exception as e:
-            storage.add_invite_log(inv["invoice_id"], gid_str, None, str(e))
+            # catat error tanpa menghentikan loop grup lainnya
+            try:
+                storage.add_invite_log(inv["invoice_id"], gid_str, None, str(e))
+            except Exception as e2:
+                print("[invite-log] failed to insert error log:", e2)
 
-        # throttle kecil agar stabil saat multi-grup
-        await asyncio.sleep(0.7)
+        await asyncio.sleep(0.7)  # throttle ringan
+
 
 
 # Serve Mini App statics
