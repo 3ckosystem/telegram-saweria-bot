@@ -1,5 +1,6 @@
 # app/main.py
 import os, json, re, base64, hmac, hashlib, httpx
+import asyncio
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException, Query
@@ -80,10 +81,6 @@ register_handlers(bot_app)
 
 # >>> helper kirim undangan (idempotent-ish)
 async def _send_invites_for_invoice(inv: dict) -> None:
-    """
-    Kirim undangan ke semua grup pada invoice.
-    Aman dipanggil berulang karena kita cek log yang sudah pernah terkirim.
-    """
     try:
         groups = json.loads(inv.get("groups_json") or "[]")
     except Exception:
@@ -91,22 +88,28 @@ async def _send_invites_for_invoice(inv: dict) -> None:
     if not groups:
         return
 
+    # Ambil log existing khusus per-group
     logs = storage.list_invite_logs(inv["invoice_id"])
-    # anggap sudah terkirim jika ada invite_link atau string "(sent" pada kolom invite_link
-    already = {
-        l.get("group_id")
-        for l in logs
-        if l.get("invite_link") or "(sent" in (l.get("invite_link") or "")
-    }
+    already = { str(l.get("group_id")) for l in logs if l.get("group_id") }
 
     for gid in groups:
-        if gid in already:
+        gid_str = str(gid)
+        if gid_str in already:
             continue
         try:
-            await send_invite_link(bot_app, inv["user_id"], gid)
-            storage.add_invite_log(inv["invoice_id"], gid, "(sent-via-status)", None)
+            gid_int = int(gid_str)           # normalisasi untuk Telegram API
+        except Exception:
+            gid_int = gid_str                # fallback tetap coba string
+
+        try:
+            await send_invite_link(bot_app, inv["user_id"], gid_int)
+            storage.add_invite_log(inv["invoice_id"], gid_str, "(sent)", None)
         except Exception as e:
-            storage.add_invite_log(inv["invoice_id"], gid, None, str(e))
+            storage.add_invite_log(inv["invoice_id"], gid_str, None, str(e))
+
+        # throttle kecil agar stabil saat multi-grup
+        await asyncio.sleep(0.7)
+
 
 # Serve Mini App statics
 app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
@@ -232,7 +235,6 @@ async def qr_png(
 
     # 5) Tunggu sebentar background (opsional)
     if wait and isinstance(wait, int) and wait > 0:
-        import asyncio
         for _ in range(min(wait, 8)):
             await asyncio.sleep(1)
             inv2 = payments.get_invoice(invoice_id)

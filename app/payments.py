@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
+import json, time, uuid
 from typing import Any, Dict, List, Optional
 
 from . import storage
@@ -66,13 +66,20 @@ def _storage_list_invoices(limit: int = 20) -> List[Dict[str, Any]]:
 
 
 # ---------- API yang dipakai main.py ----------
-async def create_invoice(user_id: int, groups: List[str], amount: int, message: str = "") -> Dict[str, Any]:
-    inv = _storage_create_invoice(user_id, groups, amount)  # message handled at QR time  # <— simpan di DB/in-memory
-
-    # jika kamu ada proses ambil QR HD di background, teruskan juga message ke fetcher:
-    # asyncio.create_task(_bg_fetch_qr_hd(inv["invoice_id"], message))
-
+async def create_invoice(user_id: int, groups: list[str], amount: int) -> dict:
+    invoice_id = str(uuid.uuid4())
+    inv = {
+        "invoice_id": invoice_id,
+        "user_id": user_id,
+        "amount": int(amount),
+        "status": "PENDING",
+        "groups_json": json.dumps([str(g) for g in groups], ensure_ascii=False),
+        "created_at": int(time.time()),
+        "qris_payload": None,
+    }
+    storage.save_invoice(inv)   # sesuaikan dengan penyimpananmu
     return inv
+
 
 
 def get_invoice(invoice_id: str) -> Optional[Dict[str, Any]]:
