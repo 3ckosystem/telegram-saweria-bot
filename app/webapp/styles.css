@@ -1,0 +1,54 @@
+:root{
+  --bg:#0b0b0b; --text:#fff; --muted:#b7b7b7; --accent:#ff2345; --stroke:#ff234566;
+  --card:#141415; --cardStroke:#ffffff12;
+}
+
+/* Kartu Neon List */
+.card{
+  position:relative; display:flex; gap:16px; align-items:flex-start;
+  margin:16px 0; padding:16px; border-radius:22px; background:var(--card);
+  border:1.5px solid var(--stroke); box-shadow:0 0 0 0 rgba(255,35,69,.25);
+}
+.card::after{ /* soft glow edge */
+  content:""; position:absolute; inset:-1px; border-radius:22px; pointer-events:none;
+  box-shadow:0 0 28px rgba(255,35,69,.18), inset 0 0 0 1px rgba(255,255,255,.04);
+}
+
+.thumb{
+  flex:0 0 148px; height:148px; border-radius:18px; overflow:hidden;
+  background:#1c0f12; border:1px solid var(--stroke);
+  background-size:cover; background-position:center;
+}
+
+/* blok teks fleksibel */
+.meta{min-width:0; flex:1 1 auto; display:flex; flex-direction:column; gap:8px}
+.title{
+  font-weight:900; font-size:20px; line-height:1.15;
+  word-break:break-word; overflow-wrap:break-word;
+}
+.desc{
+  color:var(--muted); font-size:14px; line-height:1.35;
+  word-break:break-word; overflow-wrap:break-word;
+}
+
+/* tombol “Tambah ke Keranjang” */
+.btn-outline{
+  align-self:flex-start; height:40px; padding:0 16px; border-radius:16px;
+  display:inline-grid; place-items:center; font-size:14px; color:#ffa0b0;
+  background:transparent; border:1.5px solid var(--stroke);
+}
+.card.selected{ outline:2px solid var(--accent); box-shadow:0 0 22px rgba(255,35,69,.25) }
+.card .check{
+  position:absolute; top:10px; left:10px; width:26px; height:26px; border-radius:50%;
+  display:grid; place-items:center; background:rgba(0,0,0,.5); border:1px solid #fff8;
+}
+.card.selected .check{ background:var(--accent); border-color:var(--accent) }
+
+/* Modal QR */
+.qr-modal{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+  background:rgba(0,0,0,.65); padding:18px; z-index:8 }
+.qr-modal > div{ width:min(640px,100%); max-height:85vh; overflow:auto; background:#0f0f10;
+  border:1px solid #ffffff14; border-radius:16px; padding:18px }
+.qr-modal img{ width:100%; height:auto; border-radius:10px }
+.qr-modal .close{ margin-top:10px; width:100%; background:#1b1b1b; color:#fff;
+  border:1px solid #ffffff14; padding:10px 14px; border-radius:12px; cursor:pointer }

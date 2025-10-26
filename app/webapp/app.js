@@ -1,98 +1,98 @@
-// ===== Setup & Config =====
+// ===== Setup =====
 const tg = window.Telegram?.WebApp; tg?.expand();
+
 let PRICE_PER_GROUP = 25000;
 let LOADED_GROUPS = [];
 
-document.addEventListener('DOMContentLoaded', init);
-
-async function init(){
-  try{
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
     const r = await fetch('/api/config', { cache: 'no-store' });
     const cfg = await r.json();
     PRICE_PER_GROUP = parseInt(cfg?.price_idr ?? '25000', 10) || 25000;
     LOADED_GROUPS = Array.isArray(cfg?.groups) ? cfg.groups : [];
-  }catch{ LOADED_GROUPS = []; }
-  renderNetflix(LOADED_GROUPS);
+  } catch {}
+  renderNeonList(LOADED_GROUPS);
   syncTotalText();
   document.getElementById('pay')?.addEventListener('click', onPay);
-}
+});
 
-// ===== Netflix-style render =====
-function renderNetflix(groups){
-  const rowsEl = document.getElementById('rows');
-  rowsEl.innerHTML = '';
+// ===== Render Neon List (no overflow) =====
+function renderNeonList(groups) {
+  const root = document.getElementById('list');
+  root.innerHTML = '';
 
-  // HERO (pakai item pertama yang punya image)
-  const hero = document.getElementById('hero');
-  const first = groups.find(g => (g.image||'').trim().length > 0);
-  if (first){
-    hero.hidden = false;
-    hero.style.backgroundImage = `url("${first.image}")`;
-    hero.querySelector('.heroTitle').textContent = first.name || 'Featured';
-  } else {
-    hero.hidden = true;
-  }
+  (groups || []).forEach(g => {
+    const id   = String(g.id);
+    const name = String(g.name ?? id);
+    const desc = String(g.desc ?? '').trim();
+    const img  = String(g.image ?? '').trim();
 
-  // Row tunggal "Semua Grup" (bisa ditambah chunk bila perlu)
-  const title = document.createElement('div');
-  title.className = 'rowTitle';
-  title.textContent = 'Semua Grup';
+    const card = document.createElement('article');
+    card.className = 'card';
+    card.dataset.id = id;
 
-  const list = document.createElement('div');
-  list.className = 'hlist';
+    const check = document.createElement('div');
+    check.className = 'check';
+    check.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16"><path fill="#fff" d="M9,16.2 4.8,12 3.4,13.4 9,19 21,7 19.6,5.6"/></svg>`;
 
-  (groups || []).forEach(g => list.appendChild(makePoster(g)));
+    const thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    if (img) thumb.style.backgroundImage = `url("${img}")`;
 
-  rowsEl.appendChild(title);
-  rowsEl.appendChild(list);
+    const meta = document.createElement('div');
+    meta.className = 'meta';
 
-  updateCartBadge();
-}
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = name;
 
-function makePoster(g){
-  const id = String(g.id);
-  const name = String(g.name ?? id);
-  const img = String(g.image ?? '').trim();
+    const p = document.createElement('div');
+    p.className = 'desc';
+    p.textContent = desc || 'Akses eksklusif grup pilihan.';
 
-  const poster = document.createElement('article');
-  poster.className = 'poster';
-  poster.dataset.id = id;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-outline';
+    btn.textContent = 'Tambah ke Keranjang';
 
-  const imgEl = document.createElement('div');
-  imgEl.className = 'posterImg';
-  if (img) imgEl.style.backgroundImage = `url("${img}")`;
+    // klik card = toggle select
+    card.addEventListener('click', (e) => {
+      // hindari double toggle saat klik tombol
+      if (e.target === btn) return;
+      card.classList.toggle('selected');
+      syncTotalText();
+      updateBadge();
+    });
+    btn.addEventListener('click', () => {
+      card.classList.toggle('selected');
+      syncTotalText();
+      updateBadge();
+    });
 
-  const shade = document.createElement('div'); shade.className = 'posterShade';
-  const nameEl = document.createElement('div'); nameEl.className = 'posterName'; nameEl.textContent = name;
-
-  const sel = document.createElement('div'); sel.className = 'sel';
-  sel.innerHTML = `<svg viewBox="0 0 24 24"><path fill="#fff" d="M9,16.2 4.8,12 3.4,13.4 9,19 21,7 19.6,5.6"/></svg>`;
-
-  poster.append(imgEl, shade, nameEl, sel);
-  poster.addEventListener('click', () => {
-    poster.classList.toggle('selected');
-    syncTotalText();
-    updateCartBadge();
+    meta.append(title, p, btn);
+    card.append(check, thumb, meta);
+    root.appendChild(card);
   });
 
-  return poster;
+  updateBadge();
 }
 
-function getSelectedGroupIds(){
-  return [...document.querySelectorAll('.poster.selected')].map(el => el.dataset.id);
+function getSelectedIds(){
+  return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id);
 }
 
-function updateCartBadge(){
-  const count = getSelectedGroupIds().length;
-  const badge = document.getElementById('cartBadge');
-  if (count > 0){ badge.hidden = false; badge.textContent = count; } else { badge.hidden = true; }
+function updateBadge(){
+  const n = getSelectedIds().length;
+  const b = document.getElementById('cartBadge');
+  if (n>0){ b.hidden = false; b.textContent = String(n); } else { b.hidden = true; }
 }
 
 // ===== Total & Checkout =====
-function formatRupiah(n){ if(!Number.isFinite(n)) return "Rp 0"; return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+function formatRupiah(n){ if(!Number.isFinite(n)) return "Rp 0";
+  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+
 function syncTotalText(){
-  const count = getSelectedGroupIds().length;
-  const total = count * PRICE_PER_GROUP;
+  const total = getSelectedIds().length * PRICE_PER_GROUP;
   document.getElementById('total-text').textContent = formatRupiah(total);
   document.getElementById('pay')?.toggleAttribute('disabled', total <= 0);
 }
@@ -106,7 +106,7 @@ function getUserId(){
 }
 
 async function onPay(){
-  const selected = getSelectedGroupIds();
+  const selected = getSelectedIds();
   const amount = selected.length * PRICE_PER_GROUP;
   if (!selected.length) return;
 
@@ -127,13 +127,11 @@ async function onPay(){
   }
 
   // QR
-  const ref = `INV:${inv.invoice_id}`;
   const qrPngUrl = `${window.location.origin}/api/qr/${inv.invoice_id}.png?amount=${amount}&t=${Date.now()}`;
   showQRModal(`
     <div><b>Pembayaran GoPay</b></div>
     <div style="margin:8px 0 12px; opacity:.85">QRIS sedang dimuat…</div>
     <img alt="QR" src="${qrPngUrl}">
-    <div style="margin-top:10px"><b>Kode:</b> <code>${escapeHtml(ref)}</code></div>
     <button class="close" id="closeModal">Tutup</button>
   `);
   document.getElementById('closeModal')?.addEventListener('click', hideQRModal);
