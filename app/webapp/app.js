@@ -44,9 +44,25 @@ function renderNeonList(groups) {
     const btn = document.createElement('button');
     btn.className = 'btn-outline'; btn.textContent = 'Tambah ke Keranjang'; btn.type = 'button';
 
-    card.addEventListener('click', e => { if (e.target===btn) return; card.classList.toggle('selected'); syncTotalText(); updateBadge(); });
-    btn.addEventListener('click', () => { card.classList.toggle('selected'); syncTotalText(); updateBadge(); });
+    // klik card = toggle select (kecuali area tombol)
+    card.addEventListener('click', (e) => {
+      // jika klik terjadi di dalam tombol, biarkan handler tombol yang jalan
+      if (btn.contains(e.target)) return;
+      card.classList.toggle('selected');
+      syncTotalText();
+      updateBadge();
+    });
 
+    // klik tombol – selalu jalan & hentikan bubbling ke parent
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      card.classList.toggle('selected');
+      syncTotalText();
+      updateBadge();
+    });
+
+    
     meta.append(title, p, btn);
     card.append(check, thumb, meta);
     root.appendChild(card);

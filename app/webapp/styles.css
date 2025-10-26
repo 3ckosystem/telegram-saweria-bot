@@ -51,3 +51,16 @@
 .qr-modal img{ width:100%; height:auto; border-radius:10px }
 .qr-modal .close{ margin-top:10px; width:100%; background:#1b1b1b; color:#fff;
   border:1px solid #ffffff14; padding:10px 14px; border-radius:12px; cursor:pointer }
+
+/* Pastikan modal benar-benar lenyap saat hidden */
+.qr-modal[hidden]{
+  display: none !important;
+  pointer-events: none !important;
+}
+
+/* Feel lebih klik di mobile */
+.btn-outline, .cta {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
