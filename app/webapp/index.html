@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Mini Catalog</title>
 
-  <!-- Critical CSS kecil agar tidak "telanjang" saat cache -->
+  <!-- Critical CSS mini biar gak "telanjang" -->
   <style>
     :root{--bg:#0b0b0b;--text:#fff;--muted:#b7b7b7;--accent:#ff2345;--stroke:#ff234566}
     *{box-sizing:border-box} html,body{height:100%}
@@ -27,7 +27,6 @@
     .cta:disabled{filter:grayscale(1) opacity(.6)}
   </style>
 
-  <!-- CSS utama -->
   <link rel="stylesheet" href="/webapp/styles.css?v=neon4"/>
 </head>
 <body>
@@ -35,10 +34,8 @@
     <div class="brand">Mini Catalog <span id="cartBadge" class="badge" hidden>0</span></div>
   </header>
 
-  <!-- container list -->
   <main id="list" class="list"></main>
 
-  <!-- footer checkout -->
   <footer class="paybar">
     <div class="total">
       <small>Total</small>
@@ -47,7 +44,6 @@
     <button id="pay" class="cta" disabled>Checkout</button>
   </footer>
 
-  <!-- modal QR -->
   <div id="qr" class="qr-modal" hidden></div>
 
   <script src="/webapp/app.js?v=neon4"></script>

@@ -1,4 +1,3 @@
-// ===== Setup =====
 const tg = window.Telegram?.WebApp; tg?.expand();
 
 let PRICE_PER_GROUP = 25000;
@@ -16,7 +15,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pay')?.addEventListener('click', onPay);
 });
 
-// ===== Render Neon List (no overflow) =====
 function renderNeonList(groups) {
   const root = document.getElementById('list');
   root.innerHTML = '';
@@ -39,35 +37,15 @@ function renderNeonList(groups) {
     thumb.className = 'thumb';
     if (img) thumb.style.backgroundImage = `url("${img}")`;
 
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-
-    const title = document.createElement('div');
-    title.className = 'title';
-    title.textContent = name;
-
-    const p = document.createElement('div');
-    p.className = 'desc';
-    p.textContent = desc || 'Akses eksklusif grup pilihan.';
+    const meta = document.createElement('div'); meta.className = 'meta';
+    const title = document.createElement('div'); title.className = 'title'; title.textContent = name;
+    const p = document.createElement('div'); p.className = 'desc'; p.textContent = desc || 'Akses eksklusif grup pilihan.';
 
     const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn-outline';
-    btn.textContent = 'Tambah ke Keranjang';
+    btn.className = 'btn-outline'; btn.textContent = 'Tambah ke Keranjang'; btn.type = 'button';
 
-    // klik card = toggle select
-    card.addEventListener('click', (e) => {
-      // hindari double toggle saat klik tombol
-      if (e.target === btn) return;
-      card.classList.toggle('selected');
-      syncTotalText();
-      updateBadge();
-    });
-    btn.addEventListener('click', () => {
-      card.classList.toggle('selected');
-      syncTotalText();
-      updateBadge();
-    });
+    card.addEventListener('click', e => { if (e.target===btn) return; card.classList.toggle('selected'); syncTotalText(); updateBadge(); });
+    btn.addEventListener('click', () => { card.classList.toggle('selected'); syncTotalText(); updateBadge(); });
 
     meta.append(title, p, btn);
     card.append(check, thumb, meta);
@@ -77,32 +55,16 @@ function renderNeonList(groups) {
   updateBadge();
 }
 
-function getSelectedIds(){
-  return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id);
-}
+function getSelectedIds(){ return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id); }
+function updateBadge(){ const n=getSelectedIds().length, b=document.getElementById('cartBadge'); if(n>0){b.hidden=false;b.textContent=String(n);}else b.hidden=true; }
 
-function updateBadge(){
-  const n = getSelectedIds().length;
-  const b = document.getElementById('cartBadge');
-  if (n>0){ b.hidden = false; b.textContent = String(n); } else { b.hidden = true; }
-}
-
-// ===== Total & Checkout =====
-function formatRupiah(n){ if(!Number.isFinite(n)) return "Rp 0";
-  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
-
-function syncTotalText(){
-  const total = getSelectedIds().length * PRICE_PER_GROUP;
-  document.getElementById('total-text').textContent = formatRupiah(total);
-  document.getElementById('pay')?.toggleAttribute('disabled', total <= 0);
-}
+function formatRupiah(n){ if(!Number.isFinite(n)) return "Rp 0"; return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+function syncTotalText(){ const t = getSelectedIds().length * PRICE_PER_GROUP; document.getElementById('total-text').textContent = formatRupiah(t); document.getElementById('pay')?.toggleAttribute('disabled', t<=0); }
 
 function getUserId(){
-  const fromInit = tg?.initDataUnsafe?.user?.id;
-  if (fromInit) return fromInit;
-  const qp = new URLSearchParams(window.location.search);
-  const fromQuery = qp.get("uid");
-  return fromQuery ? parseInt(fromQuery, 10) : null;
+  const u1 = tg?.initDataUnsafe?.user?.id; if (u1) return u1;
+  const qp = new URLSearchParams(window.location.search); const u2 = qp.get("uid");
+  return u2 ? parseInt(u2, 10) : null;
 }
 
 async function onPay(){
@@ -113,7 +75,6 @@ async function onPay(){
   const userId = getUserId();
   if (!userId) return showQRModal(`<div style="color:#f55">Gagal membaca user Telegram. Buka lewat tombol bot.</div>`);
 
-  // Create invoice
   let inv;
   try{
     const res = await fetch(`${window.location.origin}/api/invoice`, {
@@ -126,7 +87,6 @@ async function onPay(){
     return showQRModal(`<div style="color:#f55">Create invoice gagal:<br><code>${escapeHtml(e.message||String(e))}</code></div>`);
   }
 
-  // QR
   const qrPngUrl = `${window.location.origin}/api/qr/${inv.invoice_id}.png?amount=${amount}&t=${Date.now()}`;
   showQRModal(`
     <div><b>Pembayaran GoPay</b></div>
@@ -136,7 +96,6 @@ async function onPay(){
   `);
   document.getElementById('closeModal')?.addEventListener('click', hideQRModal);
 
-  // Poll status
   const statusUrl = `${window.location.origin}/api/invoice/${inv.invoice_id}/status`;
   let t = setInterval(async ()=>{
     try{
@@ -147,7 +106,6 @@ async function onPay(){
   }, 2000);
 }
 
-// ===== Modal helpers =====
-function showQRModal(html){ const m = document.getElementById('qr'); m.innerHTML = `<div>${html}</div>`; m.hidden = false; }
-function hideQRModal(){ const m = document.getElementById('qr'); m.hidden = true; m.innerHTML=''; }
+function showQRModal(html){ const m=document.getElementById('qr'); m.innerHTML=`<div>${html}</div>`; m.hidden=false; }
+function hideQRModal(){ const m=document.getElementById('qr'); m.hidden=true; m.innerHTML=''; }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
