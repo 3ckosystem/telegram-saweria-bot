@@ -3,8 +3,45 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Browse</title>
-  <link rel="stylesheet" href="./styles.css"/>
+  <title>Mini Catalog</title>
+
+  <!-- 1) Inline critical CSS supaya tidak "telanjang" saat CSS eksternal gagal di-cache -->
+  <style>
+  :root{--bg:#0b0b0b;--text:#fff;--muted:#b7b7b7;--accent:#e50914}
+  *{box-sizing:border-box}html,body{height:100%}
+  body{margin:0;color:var(--text);background:var(--bg);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial}
+  .nf-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;padding:14px 14px 10px;background:linear-gradient(180deg,rgba(0,0,0,.8),rgba(0,0,0,.3),transparent)}
+  .brand{font-weight:900;letter-spacing:.2px;font-size:22px}
+  .badge{min-width:22px;height:22px;padding:0 6px;border-radius:999px;display:inline-grid;place-items:center;font-size:12px;background:var(--accent)}
+  .hero{position:relative;height:38vh;max-height:360px;border-bottom:1px solid rgba(255,255,255,.08)}
+  .hero::before{content:"";position:absolute;inset:0;background-size:cover;background-position:center;filter:contrast(1.05) saturate(1.05)}
+  .heroShade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 0, rgba(0,0,0,.75) 75%)}
+  .heroTitle{position:absolute;left:14px;bottom:12px;font-size:26px;font-weight:800;text-shadow:0 8px 28px rgba(0,0,0,.9)}
+  .rows{padding:10px 0 110px}
+  .rowTitle{margin:12px 14px 8px;font-weight:800;letter-spacing:.2px}
+  .hlist{display:flex;gap:10px;padding:0 10px 4px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory}
+  .hlist::-webkit-scrollbar{display:none}
+  .poster{position:relative;scroll-snap-align:start;flex:0 0 34vw;max-width:240px;aspect-ratio:2/3;border-radius:10px;overflow:hidden;background:#121212;outline:1px solid rgba(255,255,255,.06)}
+  .posterImg{position:absolute;inset:0;background-size:cover;background-position:center}
+  .posterShade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%, rgba(0,0,0,.9))}
+  .posterName{position:absolute;left:8px;right:8px;bottom:8px;font-size:12px;font-weight:700;opacity:.95;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sel{position:absolute;top:8px;left:8px;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.8);backdrop-filter:blur(6px);transition:.15s}
+  .poster.selected .sel{background:var(--accent);border-color:var(--accent);box-shadow:0 0 22px rgba(229,9,20,.55)}
+  .sel svg{width:16px;height:16px}
+  .paybar{position:fixed;left:0;right:0;bottom:0;z-index:5;display:flex;align-items:center;gap:14px;padding:14px 16px 18px;background:linear-gradient(0deg,rgba(0,0,0,.8),rgba(0,0,0,.5));border-top:1px solid rgba(255,255,255,.08);backdrop-filter:blur(8px)}
+  .total{flex:1;display:flex;flex-direction:column}
+  .total span{color:var(--muted);font-size:13px}
+  .total strong{font-size:24px}
+  .cta{appearance:none;border:0;min-width:140px;padding:14px 22px;border-radius:12px;color:#fff;font-weight:900;background:var(--accent)}
+  .cta:disabled{filter:grayscale(1) opacity(.6)}
+  .qr-modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.65);padding:18px}
+  .qr-modal>div{width:min(640px,100%);max-height:85vh;overflow:auto;background:#0f0f10;border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:18px}
+  .qr-modal img{width:100%;height:auto;display:block;border-radius:10px}
+  .qr-modal .close{margin-top:10px;width:100%;background:#1b1b1b;color:#fff;border:1px solid rgba(255,255,255,.08);padding:10px 14px;border-radius:12px;cursor:pointer}
+  </style>
+
+  <!-- 2) Tetap muat CSS eksternal (untuk kemudahan edit), pakai absolute + versi -->
+  <link rel="stylesheet" href="/webapp/styles.css?v=netflix2" />
 </head>
 <body>
   <header class="nf-header">
@@ -12,16 +49,13 @@
     <div id="cartBadge" class="badge" hidden>0</div>
   </header>
 
-  <!-- HERO (opsional, akan diisi gambar pertama jika ada) -->
   <section id="hero" class="hero" hidden>
     <div class="heroShade"></div>
     <div class="heroTitle"></div>
   </section>
 
-  <!-- ROWS (Netflix-style) -->
   <main id="rows" class="rows"></main>
 
-  <!-- Sticky checkout -->
   <footer class="paybar">
     <div class="total">
       <span>Total</span>
@@ -30,9 +64,9 @@
     <button id="pay" class="cta" disabled>Checkout</button>
   </footer>
 
-  <!-- QR modal -->
   <div id="qr" class="qr-modal" hidden></div>
 
-  <script src="./app.js"></script>
+  <!-- 3) Absolute path + versi agar JS baru terambil -->
+  <script src="/webapp/app.js?v=netflix2"></script>
 </body>
 </html>

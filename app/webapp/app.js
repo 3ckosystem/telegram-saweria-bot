@@ -7,11 +7,11 @@ document.addEventListener('DOMContentLoaded', init);
 
 async function init(){
   try{
-    const r = await fetch('/api/config');
+    const r = await fetch('/api/config', { cache: 'no-store' });
     const cfg = await r.json();
     PRICE_PER_GROUP = parseInt(cfg?.price_idr ?? '25000', 10) || 25000;
     LOADED_GROUPS = Array.isArray(cfg?.groups) ? cfg.groups : [];
-  }catch{}
+  }catch{ LOADED_GROUPS = []; }
   renderNetflix(LOADED_GROUPS);
   syncTotalText();
   document.getElementById('pay')?.addEventListener('click', onPay);
@@ -24,36 +24,27 @@ function renderNetflix(groups){
 
   // HERO (pakai item pertama yang punya image)
   const hero = document.getElementById('hero');
-  const firstImg = groups.find(g => g.image)?.image;
-  if (firstImg){
+  const first = groups.find(g => (g.image||'').trim().length > 0);
+  if (first){
     hero.hidden = false;
-    hero.style.setProperty('--hero', `url("${firstImg}")`);
-    hero.style.setProperty('background-image', `url("${firstImg}")`);
-    hero.querySelector('.heroTitle').textContent = (groups[0]?.name || 'Featured');
-    hero.style.setProperty('--bg', firstImg);
-    hero.style.setProperty('--img', `url("${firstImg}")`);
-    hero.style.setProperty('--size','cover');
-    hero.style.setProperty('--pos','center');
-    hero.style.backgroundImage = `url("${firstImg}")`;
-    hero.style.setProperty('background-size','cover');
-    hero.style.setProperty('background-position','center');
+    hero.style.backgroundImage = `url("${first.image}")`;
+    hero.querySelector('.heroTitle').textContent = first.name || 'Featured';
+  } else {
+    hero.hidden = true;
   }
 
-  // Bikin beberapa row “kategori” dari satu list (chunking)
-  const chunks = chunk(groups, 10); // 10 poster per row
-  chunks.forEach((items, idx) => {
-    const title = document.createElement('div');
-    title.className = 'rowTitle';
-    title.textContent = idx === 0 ? 'Semua Grup' : `Lainnya ${idx+1}`;
+  // Row tunggal "Semua Grup" (bisa ditambah chunk bila perlu)
+  const title = document.createElement('div');
+  title.className = 'rowTitle';
+  title.textContent = 'Semua Grup';
 
-    const list = document.createElement('div');
-    list.className = 'hlist';
+  const list = document.createElement('div');
+  list.className = 'hlist';
 
-    items.forEach(g => list.appendChild(makePoster(g)));
+  (groups || []).forEach(g => list.appendChild(makePoster(g)));
 
-    rowsEl.appendChild(title);
-    rowsEl.appendChild(list);
-  });
+  rowsEl.appendChild(title);
+  rowsEl.appendChild(list);
 
   updateCartBadge();
 }
@@ -87,10 +78,6 @@ function makePoster(g){
   return poster;
 }
 
-function chunk(arr, size){
-  const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out;
-}
-
 function getSelectedGroupIds(){
   return [...document.querySelectorAll('.poster.selected')].map(el => el.dataset.id);
 }
@@ -118,8 +105,6 @@ function getUserId(){
   return fromQuery ? parseInt(fromQuery, 10) : null;
 }
 
-document.getElementById('pay')?.addEventListener('click', onPay);
-
 async function onPay(){
   const selected = getSelectedGroupIds();
   const amount = selected.length * PRICE_PER_GROUP;
@@ -128,7 +113,7 @@ async function onPay(){
   const userId = getUserId();
   if (!userId) return showQRModal(`<div style="color:#f55">Gagal membaca user Telegram. Buka lewat tombol bot.</div>`);
 
-  // 1) create invoice
+  // Create invoice
   let inv;
   try{
     const res = await fetch(`${window.location.origin}/api/invoice`, {
@@ -141,36 +126,30 @@ async function onPay(){
     return showQRModal(`<div style="color:#f55">Create invoice gagal:<br><code>${escapeHtml(e.message||String(e))}</code></div>`);
   }
 
-  // 2) QR
+  // QR
   const ref = `INV:${inv.invoice_id}`;
   const qrPngUrl = `${window.location.origin}/api/qr/${inv.invoice_id}.png?amount=${amount}&t=${Date.now()}`;
   showQRModal(`
     <div><b>Pembayaran GoPay</b></div>
-    <div id="qruistate" style="margin:8px 0 12px; opacity:.85">QRIS sedang dimuat…</div>
-    <img id="qrimg" alt="QR" src="${qrPngUrl}">
+    <div style="margin:8px 0 12px; opacity:.85">QRIS sedang dimuat…</div>
+    <img alt="QR" src="${qrPngUrl}">
     <div style="margin-top:10px"><b>Kode:</b> <code>${escapeHtml(ref)}</code></div>
     <button class="close" id="closeModal">Tutup</button>
   `);
   document.getElementById('closeModal')?.addEventListener('click', hideQRModal);
 
-  // 3) polling status
+  // Poll status
   const statusUrl = `${window.location.origin}/api/invoice/${inv.invoice_id}/status`;
   let t = setInterval(async ()=>{
     try{
       const r = await fetch(statusUrl); if(!r.ok) return;
       const s = await r.json();
-      if (s.status === "PAID"){
-        clearInterval(t);
-        hideQRModal();
-        tg?.close?.();
-      }
+      if (s.status === "PAID"){ clearInterval(t); hideQRModal(); tg?.close?.(); }
     }catch{}
   }, 2000);
 }
 
 // ===== Modal helpers =====
-function showQRModal(html){
-  const m = document.getElementById('qr'); m.innerHTML = `<div>${html}</div>`; m.hidden = false;
-}
+function showQRModal(html){ const m = document.getElementById('qr'); m.innerHTML = `<div>${html}</div>`; m.hidden = false; }
 function hideQRModal(){ const m = document.getElementById('qr'); m.hidden = true; m.innerHTML=''; }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
