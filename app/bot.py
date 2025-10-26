@@ -35,7 +35,8 @@ def build_app() -> Application:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    webapp_url = f"{BASE_URL}/webapp/index.html?uid={uid}"
+    webapp_url = f"{BASE_URL}/webapp/index.html?v=neon1&uid={uid}"
+
 
     kb = [[KeyboardButton(
         text="🛍️ Buka Katalog",

@@ -1,102 +1,87 @@
-// === Config & Telegram ===
+// ============ Config + Telegram ============
+const tg = window.Telegram?.WebApp; tg?.expand();
 let PRICE_PER_GROUP = 25000;
 let LOADED_GROUPS = [];
-const tg = window.Telegram?.WebApp; tg?.expand();
 
-document.addEventListener('DOMContentLoaded', loadConfigAndRender);
+document.addEventListener('DOMContentLoaded', init);
 
-async function loadConfigAndRender() {
-  try {
+async function init(){
+  try{
     const r = await fetch('/api/config');
     const cfg = await r.json();
     PRICE_PER_GROUP = parseInt(cfg?.price_idr ?? '25000', 10) || 25000;
     LOADED_GROUPS = Array.isArray(cfg?.groups) ? cfg.groups : [];
-  } catch {}
-  renderCarousel(LOADED_GROUPS);
+  }catch{}
+  renderList(LOADED_GROUPS);
   syncTotalText();
+  document.getElementById('pay')?.addEventListener('click', onPay);
 }
 
-// ------ Carousel render ------
-function renderCarousel(groups){
-  const wrap = document.getElementById('groupsCarousel');
-  wrap.innerHTML = '';
+// ============ Render Neon List ============
+function renderList(groups){
+  const list = document.getElementById('list');
+  list.innerHTML = '';
 
-  groups.forEach((g, i) => {
+  groups.forEach(g=>{
     const id = String(g.id);
-    const title = String(g.name ?? id);
-    const imgUrl = String(g.image ?? '').trim();
+    const name = String(g.name ?? id);
+    const image = String(g.image ?? '').trim();
+    const emoji = String(g.emoji ?? '🔥'); // fallback icon
 
     const card = document.createElement('article');
-    card.className = 'card' + (i === 0 ? ' focus' : '');
+    card.className = 'card';
     card.dataset.id = id;
-    card.title = title;
 
-    const img = document.createElement('div');
-    img.className = 'img';
-    if (imgUrl) img.style.backgroundImage = `url("${imgUrl}")`;
+    const row = document.createElement('div'); row.className = 'row';
 
-    const shade = document.createElement('div'); shade.className = 'shade';
-    const titleEl = document.createElement('div'); titleEl.className = 'title'; titleEl.textContent = title;
+    const thumb = document.createElement('div'); thumb.className = 'thumb';
+    if (image){
+      const im = document.createElement('img'); im.src = image; im.alt = '';
+      thumb.appendChild(im);
+    }else{
+      thumb.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+        <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+          <stop stop-color="#ff3a54"/><stop offset="1" stop-color="#d60d2d"/></linearGradient></defs>
+        <circle cx="12" cy="12" r="10" fill="url(#g)"/>
+        <text x="12" y="16" text-anchor="middle" font-size="10" fill="#000" font-weight="700">${emoji}</text>
+      </svg>`;
+    }
 
-    const tick = document.createElement('div'); tick.className = 'tick';
-    tick.innerHTML = `<svg viewBox="0 0 24 24"><path fill="#fff" d="M9.0,16.2 4.8,12.0 3.4,13.4 9.0,19.0 21.0,7.0 19.6,5.6"/></svg>`;
+    const content = document.createElement('div');
+    const title = document.createElement('div'); title.className = 'title'; title.textContent = name;
 
-    card.append(img, shade, titleEl, tick);
-    card.addEventListener('click', () => { card.classList.toggle('selected'); syncTotalText(); renderPills(); });
-    wrap.appendChild(card);
+    const btn = document.createElement('button'); btn.className = 'btn'; btn.textContent = 'Tambah ke Keranjang';
+
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      card.classList.toggle('selected');
+      btn.textContent = card.classList.contains('selected') ? 'Hapus dari Keranjang' : 'Tambah ke Keranjang';
+      syncTotalText();
+    });
+
+    card.addEventListener('click', ()=>{
+      card.classList.toggle('selected');
+      btn.textContent = card.classList.contains('selected') ? 'Hapus dari Keranjang' : 'Tambah ke Keranjang';
+      syncTotalText();
+    });
+
+    content.appendChild(title);
+    content.appendChild(btn);
+    row.appendChild(thumb);
+    row.appendChild(content);
+    card.appendChild(row);
+    list.appendChild(card);
   });
-
-  // Snap focus handler
-  wrap.addEventListener('scroll', () => {
-    clearTimeout(wrap._snapTimer);
-    wrap._snapTimer = setTimeout(() => setFocusByCenter(wrap), 60);
-  });
-  setFocusByCenter(wrap);
-
-  // Arrows
-  document.getElementById('prev')?.addEventListener('click', () => scrollByCard(wrap, -1));
-  document.getElementById('next')?.addEventListener('click', () => scrollByCard(wrap, +1));
-
-  renderPills();
 }
 
-function setFocusByCenter(container){
-  const rect = container.getBoundingClientRect();
-  const mid = rect.left + rect.width/2;
-  let best = null, bestDist = 1e9;
-  [...container.children].forEach(card => {
-    const r = card.getBoundingClientRect();
-    const center = r.left + r.width/2;
-    const d = Math.abs(center - mid);
-    if (d < bestDist){ bestDist = d; best = card; }
-  });
-  if (best) {
-    container.querySelectorAll('.card.focus').forEach(c => c.classList.remove('focus'));
-    best.classList.add('focus');
-  }
-}
-
-function scrollByCard(container, dir){
-  const cards = [...container.children];
-  const focusedIndex = cards.findIndex(c => c.classList.contains('focus'));
-  const nextIndex = Math.max(0, Math.min(cards.length-1, focusedIndex + dir));
-  const next = cards[nextIndex];
-  next?.scrollIntoView({behavior:'smooth', inline:'center'});
-}
-
-// ------ Selection helpers ------
 function getSelectedGroupIds(){
   return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id);
 }
-function renderPills(){
-  const pills = document.getElementById('selectedPills');
-  const ids = getSelectedGroupIds();
-  const nameMap = Object.fromEntries((LOADED_GROUPS||[]).map(g => [String(g.id), String(g.name ?? g.id)]));
-  pills.innerHTML = ids.map(id => `<span class="pill">${escapeHtml(nameMap[id]||id)}</span>`).join('');
-}
 
-// ------ Rupiah, total, CTA ------
-function formatRupiah(n){ if(!Number.isFinite(n)) return "Rp 0"; return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+function formatRupiah(n){
+  if(!Number.isFinite(n)) return "Rp 0";
+  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
 function syncTotalText(){
   const count = getSelectedGroupIds().length;
   const total = count * PRICE_PER_GROUP;
@@ -104,7 +89,7 @@ function syncTotalText(){
   document.getElementById('pay')?.toggleAttribute('disabled', total <= 0);
 }
 
-// ------ QR + checkout flow (tetap) ------
+// ============ Checkout & QR ============
 function getUserId(){
   const fromInit = tg?.initDataUnsafe?.user?.id;
   if (fromInit) return fromInit;
@@ -112,7 +97,6 @@ function getUserId(){
   const fromQuery = qp.get("uid");
   return fromQuery ? parseInt(fromQuery, 10) : null;
 }
-document.getElementById('pay')?.addEventListener('click', onPay);
 
 async function onPay(){
   const selected = getSelectedGroupIds();
@@ -120,9 +104,9 @@ async function onPay(){
   if (!selected.length) return;
 
   const userId = getUserId();
-  if (!userId) return showQRModal(`<div style="color:#f55">Gagal membaca user Telegram. Buka via tombol bot.</div>`);
+  if (!userId) return showQRModal(`<div style="color:#f55">Gagal membaca user Telegram. Buka lewat tombol bot.</div>`);
 
-  // create invoice
+  // 1) buat invoice
   let inv;
   try{
     const res = await fetch(`${window.location.origin}/api/invoice`, {
@@ -135,26 +119,26 @@ async function onPay(){
     return showQRModal(`<div style="color:#f55">Create invoice gagal:<br><code>${escapeHtml(e.message||String(e))}</code></div>`);
   }
 
-  // show QR
+  // 2) tampilkan QR
   const ref = `INV:${inv.invoice_id}`;
   const qrPngUrl = `${window.location.origin}/api/qr/${inv.invoice_id}.png?amount=${amount}&t=${Date.now()}`;
   showQRModal(`
     <div><b>Pembayaran GoPay</b></div>
-    <div id="qruistate" style="margin:8px 0 12px 0; opacity:.85">QRIS sedang dimuat…</div>
+    <div id="qruistate" style="margin:8px 0 12px; opacity:.85">QRIS sedang dimuat…</div>
     <img id="qrimg" alt="QR" src="${qrPngUrl}">
     <div style="margin-top:10px"><b>Kode:</b> <code>${escapeHtml(ref)}</code></div>
     <button class="close" id="closeModal">Tutup</button>
   `);
   document.getElementById('closeModal')?.addEventListener('click', hideQRModal);
 
-  // poll status
+  // 3) polling status → auto-close
   const statusUrl = `${window.location.origin}/api/invoice/${inv.invoice_id}/status`;
-  let timer = setInterval(async () => {
+  let t = setInterval(async ()=>{
     try{
       const r = await fetch(statusUrl); if(!r.ok) return;
       const s = await r.json();
       if (s.status === "PAID"){
-        clearInterval(timer);
+        clearInterval(t);
         hideQRModal();
         tg?.close?.();
       }
@@ -162,7 +146,7 @@ async function onPay(){
   }, 2000);
 }
 
-// ------ Modal helpers ------
+// ============ Modal helpers ============
 function showQRModal(html){
   const m = document.getElementById('qr'); m.innerHTML = `<div>${html}</div>`; m.hidden = false;
 }

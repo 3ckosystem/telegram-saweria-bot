@@ -3,27 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Select Group</title>
+  <title>Mini Catalog</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
   <header class="topbar">
-    <h1>Select Group</h1>
+    <h1>Mini Catalog</h1>
   </header>
 
-  <!-- Carousel -->
-  <section class="carousel-wrap">
-    <div id="groupsCarousel" class="carousel" aria-label="Groups"></div>
+  <main id="list" class="list"></main>
 
-    <!-- Nav arrows -->
-    <button id="prev" class="nav prev" aria-label="Previous">‹</button>
-    <button id="next" class="nav next" aria-label="Next">›</button>
-  </section>
-
-  <!-- Selected pills (optional) -->
-  <div id="selectedPills" class="pills"></div>
-
-  <!-- Sticky footer -->
   <footer class="paybar">
     <div class="total">
       <span>Total</span>
@@ -32,7 +21,6 @@
     <button id="pay" class="cta" disabled>Checkout</button>
   </footer>
 
-  <!-- QR modal -->
   <div id="qr" class="qr-modal" hidden></div>
 
   <script src="./app.js"></script>
