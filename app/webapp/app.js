@@ -1,4 +1,4 @@
-// ============ Config + Telegram ============
+// ===== Setup & Config =====
 const tg = window.Telegram?.WebApp; tg?.expand();
 let PRICE_PER_GROUP = 25000;
 let LOADED_GROUPS = [];
@@ -12,76 +12,97 @@ async function init(){
     PRICE_PER_GROUP = parseInt(cfg?.price_idr ?? '25000', 10) || 25000;
     LOADED_GROUPS = Array.isArray(cfg?.groups) ? cfg.groups : [];
   }catch{}
-  renderList(LOADED_GROUPS);
+  renderNetflix(LOADED_GROUPS);
   syncTotalText();
   document.getElementById('pay')?.addEventListener('click', onPay);
 }
 
-// ============ Render Neon List ============
-function renderList(groups){
-  const list = document.getElementById('list');
-  list.innerHTML = '';
+// ===== Netflix-style render =====
+function renderNetflix(groups){
+  const rowsEl = document.getElementById('rows');
+  rowsEl.innerHTML = '';
 
-  groups.forEach(g=>{
-    const id = String(g.id);
-    const name = String(g.name ?? id);
-    const image = String(g.image ?? '').trim();
-    const emoji = String(g.emoji ?? '🔥'); // fallback icon
+  // HERO (pakai item pertama yang punya image)
+  const hero = document.getElementById('hero');
+  const firstImg = groups.find(g => g.image)?.image;
+  if (firstImg){
+    hero.hidden = false;
+    hero.style.setProperty('--hero', `url("${firstImg}")`);
+    hero.style.setProperty('background-image', `url("${firstImg}")`);
+    hero.querySelector('.heroTitle').textContent = (groups[0]?.name || 'Featured');
+    hero.style.setProperty('--bg', firstImg);
+    hero.style.setProperty('--img', `url("${firstImg}")`);
+    hero.style.setProperty('--size','cover');
+    hero.style.setProperty('--pos','center');
+    hero.style.backgroundImage = `url("${firstImg}")`;
+    hero.style.setProperty('background-size','cover');
+    hero.style.setProperty('background-position','center');
+  }
 
-    const card = document.createElement('article');
-    card.className = 'card';
-    card.dataset.id = id;
+  // Bikin beberapa row “kategori” dari satu list (chunking)
+  const chunks = chunk(groups, 10); // 10 poster per row
+  chunks.forEach((items, idx) => {
+    const title = document.createElement('div');
+    title.className = 'rowTitle';
+    title.textContent = idx === 0 ? 'Semua Grup' : `Lainnya ${idx+1}`;
 
-    const row = document.createElement('div'); row.className = 'row';
+    const list = document.createElement('div');
+    list.className = 'hlist';
 
-    const thumb = document.createElement('div'); thumb.className = 'thumb';
-    if (image){
-      const im = document.createElement('img'); im.src = image; im.alt = '';
-      thumb.appendChild(im);
-    }else{
-      thumb.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
-        <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-          <stop stop-color="#ff3a54"/><stop offset="1" stop-color="#d60d2d"/></linearGradient></defs>
-        <circle cx="12" cy="12" r="10" fill="url(#g)"/>
-        <text x="12" y="16" text-anchor="middle" font-size="10" fill="#000" font-weight="700">${emoji}</text>
-      </svg>`;
-    }
+    items.forEach(g => list.appendChild(makePoster(g)));
 
-    const content = document.createElement('div');
-    const title = document.createElement('div'); title.className = 'title'; title.textContent = name;
-
-    const btn = document.createElement('button'); btn.className = 'btn'; btn.textContent = 'Tambah ke Keranjang';
-
-    btn.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      card.classList.toggle('selected');
-      btn.textContent = card.classList.contains('selected') ? 'Hapus dari Keranjang' : 'Tambah ke Keranjang';
-      syncTotalText();
-    });
-
-    card.addEventListener('click', ()=>{
-      card.classList.toggle('selected');
-      btn.textContent = card.classList.contains('selected') ? 'Hapus dari Keranjang' : 'Tambah ke Keranjang';
-      syncTotalText();
-    });
-
-    content.appendChild(title);
-    content.appendChild(btn);
-    row.appendChild(thumb);
-    row.appendChild(content);
-    card.appendChild(row);
-    list.appendChild(card);
+    rowsEl.appendChild(title);
+    rowsEl.appendChild(list);
   });
+
+  updateCartBadge();
+}
+
+function makePoster(g){
+  const id = String(g.id);
+  const name = String(g.name ?? id);
+  const img = String(g.image ?? '').trim();
+
+  const poster = document.createElement('article');
+  poster.className = 'poster';
+  poster.dataset.id = id;
+
+  const imgEl = document.createElement('div');
+  imgEl.className = 'posterImg';
+  if (img) imgEl.style.backgroundImage = `url("${img}")`;
+
+  const shade = document.createElement('div'); shade.className = 'posterShade';
+  const nameEl = document.createElement('div'); nameEl.className = 'posterName'; nameEl.textContent = name;
+
+  const sel = document.createElement('div'); sel.className = 'sel';
+  sel.innerHTML = `<svg viewBox="0 0 24 24"><path fill="#fff" d="M9,16.2 4.8,12 3.4,13.4 9,19 21,7 19.6,5.6"/></svg>`;
+
+  poster.append(imgEl, shade, nameEl, sel);
+  poster.addEventListener('click', () => {
+    poster.classList.toggle('selected');
+    syncTotalText();
+    updateCartBadge();
+  });
+
+  return poster;
+}
+
+function chunk(arr, size){
+  const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out;
 }
 
 function getSelectedGroupIds(){
-  return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id);
+  return [...document.querySelectorAll('.poster.selected')].map(el => el.dataset.id);
 }
 
-function formatRupiah(n){
-  if(!Number.isFinite(n)) return "Rp 0";
-  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+function updateCartBadge(){
+  const count = getSelectedGroupIds().length;
+  const badge = document.getElementById('cartBadge');
+  if (count > 0){ badge.hidden = false; badge.textContent = count; } else { badge.hidden = true; }
 }
+
+// ===== Total & Checkout =====
+function formatRupiah(n){ if(!Number.isFinite(n)) return "Rp 0"; return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
 function syncTotalText(){
   const count = getSelectedGroupIds().length;
   const total = count * PRICE_PER_GROUP;
@@ -89,7 +110,6 @@ function syncTotalText(){
   document.getElementById('pay')?.toggleAttribute('disabled', total <= 0);
 }
 
-// ============ Checkout & QR ============
 function getUserId(){
   const fromInit = tg?.initDataUnsafe?.user?.id;
   if (fromInit) return fromInit;
@@ -97,6 +117,8 @@ function getUserId(){
   const fromQuery = qp.get("uid");
   return fromQuery ? parseInt(fromQuery, 10) : null;
 }
+
+document.getElementById('pay')?.addEventListener('click', onPay);
 
 async function onPay(){
   const selected = getSelectedGroupIds();
@@ -106,7 +128,7 @@ async function onPay(){
   const userId = getUserId();
   if (!userId) return showQRModal(`<div style="color:#f55">Gagal membaca user Telegram. Buka lewat tombol bot.</div>`);
 
-  // 1) buat invoice
+  // 1) create invoice
   let inv;
   try{
     const res = await fetch(`${window.location.origin}/api/invoice`, {
@@ -119,7 +141,7 @@ async function onPay(){
     return showQRModal(`<div style="color:#f55">Create invoice gagal:<br><code>${escapeHtml(e.message||String(e))}</code></div>`);
   }
 
-  // 2) tampilkan QR
+  // 2) QR
   const ref = `INV:${inv.invoice_id}`;
   const qrPngUrl = `${window.location.origin}/api/qr/${inv.invoice_id}.png?amount=${amount}&t=${Date.now()}`;
   showQRModal(`
@@ -131,7 +153,7 @@ async function onPay(){
   `);
   document.getElementById('closeModal')?.addEventListener('click', hideQRModal);
 
-  // 3) polling status → auto-close
+  // 3) polling status
   const statusUrl = `${window.location.origin}/api/invoice/${inv.invoice_id}/status`;
   let t = setInterval(async ()=>{
     try{
@@ -146,7 +168,7 @@ async function onPay(){
   }, 2000);
 }
 
-// ============ Modal helpers ============
+// ===== Modal helpers =====
 function showQRModal(html){
   const m = document.getElementById('qr'); m.innerHTML = `<div>${html}</div>`; m.hidden = false;
 }

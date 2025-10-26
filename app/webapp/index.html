@@ -1,18 +1,27 @@
 <!doctype html>
 <html lang="id">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Mini Catalog</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Browse</title>
+  <link rel="stylesheet" href="./styles.css"/>
 </head>
 <body>
-  <header class="topbar">
-    <h1>Mini Catalog</h1>
+  <header class="nf-header">
+    <div class="brand">Mini Catalog</div>
+    <div id="cartBadge" class="badge" hidden>0</div>
   </header>
 
-  <main id="list" class="list"></main>
+  <!-- HERO (opsional, akan diisi gambar pertama jika ada) -->
+  <section id="hero" class="hero" hidden>
+    <div class="heroShade"></div>
+    <div class="heroTitle"></div>
+  </section>
 
+  <!-- ROWS (Netflix-style) -->
+  <main id="rows" class="rows"></main>
+
+  <!-- Sticky checkout -->
   <footer class="paybar">
     <div class="total">
       <span>Total</span>
@@ -21,6 +30,7 @@
     <button id="pay" class="cta" disabled>Checkout</button>
   </footer>
 
+  <!-- QR modal -->
   <div id="qr" class="qr-modal" hidden></div>
 
   <script src="./app.js"></script>
