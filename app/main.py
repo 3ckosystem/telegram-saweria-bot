@@ -47,20 +47,34 @@ def _parse_groups_from_any(data):
     groups = []
     if isinstance(data, dict):
         for k, v in data.items():
-            groups.append({"id": str(k), "name": str(v)})
+            # dukung bentuk {"-100..": "Nama"} atau {"-100..": {"name":..., "desc":..., "image":...}}
+            if isinstance(v, dict):
+                gid  = str(k).strip()
+                nm   = str(v.get("name") or v.get("label") or v.get("text") or gid).strip()
+                init = str(v.get("initial") or "").strip()
+                desc = str(v.get("desc") or v.get("description") or "").strip()
+                image = str(v.get("image") or v.get("img") or "").strip()
+            else:
+                gid, nm, init, desc, image = str(k).strip(), str(v).strip(), "", "", ""
+            if gid and nm:
+                groups.append({"id": gid, "name": nm, "initial": init, "desc": desc, "image": image})
+
     elif isinstance(data, list):
         for it in data:
             if isinstance(it, dict):
-                gid = str(it.get("id") or it.get("group_id") or it.get("value") or "").strip()
-                nm  = str(it.get("name") or it.get("label")    or it.get("text")  or "").strip()
+                gid  = str(it.get("id") or it.get("group_id") or it.get("value") or "").strip()
+                nm   = str(it.get("name") or it.get("label")    or it.get("text")  or gid).strip()
                 init = str(it.get("initial") or "").strip()
+                desc = str(it.get("desc") or it.get("description") or "").strip()
+                image = str(it.get("image") or it.get("img") or "").strip()
                 if gid and nm:
-                    groups.append({"id": gid, "name": nm, "initial": init})
+                    groups.append({"id": gid, "name": nm, "initial": init, "desc": desc, "image": image})
             else:
                 gid = str(it).strip()
                 if gid:
-                    groups.append({"id": gid, "name": gid})
+                    groups.append({"id": gid, "name": gid, "initial": "", "desc": "", "image": ""})
     return groups
+
 
 # BACA ENV SEKARANG (module scope)
 GROUPS_DATA = _read_env_json("GROUP_IDS_JSON", "[]")
