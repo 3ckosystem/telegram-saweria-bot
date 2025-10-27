@@ -23,6 +23,7 @@ function renderNeonList(groups) {
     const id   = String(g.id);
     const name = String(g.name ?? id);
     const desc = String(g.desc ?? '').trim();
+    const longDesc = String(g.long_desc ?? desc).trim();
     const img  = String(g.image ?? '').trim();
 
     const card = document.createElement('article');
@@ -42,34 +43,79 @@ function renderNeonList(groups) {
     const p = document.createElement('div'); p.className = 'desc'; p.textContent = desc || 'Akses eksklusif grup pilihan.';
 
     const btn = document.createElement('button');
-    btn.className = 'btn-outline'; btn.textContent = 'Tambah ke Keranjang'; btn.type = 'button';
+    btn.type = 'button';
+    btn.className = 'btn-outline';
+    btn.textContent = 'Tambah ke Keranjang';
 
-    // klik card = toggle select (kecuali area tombol)
-    card.addEventListener('click', (e) => {
-      // jika klik terjadi di dalam tombol, biarkan handler tombol yang jalan
-      if (btn.contains(e.target)) return;
-      card.classList.toggle('selected');
-      syncTotalText();
-      updateBadge();
-    });
-
-    // klik tombol – selalu jalan & hentikan bubbling ke parent
+    // === BEHAVIOR BARU ===
+    // 1) Klik tombol: toggle select (HANYA di tombol)
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      card.classList.toggle('selected');
-      syncTotalText();
-      updateBadge();
+      toggleSelect(card);
     });
 
-    
+    // 2) Klik di luar tombol: buka modal detail
+    card.addEventListener('click', (e) => {
+      if (btn.contains(e.target)) return; // safety
+      openDetailModal({ id, name, desc: longDesc || desc, image: img });
+    });
+
     meta.append(title, p, btn);
     card.append(check, thumb, meta);
     root.appendChild(card);
+
+    // set label awal sesuai state
+    updateButtonState(card, btn);
   });
 
   updateBadge();
 }
+
+function toggleSelect(card){
+  card.classList.toggle('selected');
+  // Update label di tombol pada kartu
+  const btn = card.querySelector('.btn-outline');
+  if (btn) updateButtonState(card, btn);
+  syncTotalText(); updateBadge();
+}
+
+function updateButtonState(card, btn){
+  const selected = card.classList.contains('selected');
+  btn.textContent = selected ? 'Hapus dari Keranjang' : 'Tambah ke Keranjang';
+}
+
+function openDetailModal(item){
+  const m = document.getElementById('detail');
+  const card = document.querySelector(`.card[data-id="${CSS.escape(item.id)}"]`);
+  const selected = card?.classList.contains('selected');
+
+  m.innerHTML = `
+    <div class="sheet">
+      <div class="hero" style="${item.image ? `background-image:url('${item.image}')` : ''}"></div>
+      <div class="title">${escapeHtml(item.name)}</div>
+      <div class="desc">${escapeHtml(item.desc || '')}</div>
+      <div class="row">
+        <button class="close">Tutup</button>
+        <button class="add">${selected ? 'Hapus dari Keranjang' : 'Tambah ke Keranjang'}</button>
+      </div>
+    </div>
+  `;
+  m.hidden = false;
+
+  m.querySelector('.close')?.addEventListener('click', () => closeDetailModal());
+  m.querySelector('.add')?.addEventListener('click', () => {
+    if (card) toggleSelect(card);
+    closeDetailModal();
+  });
+  // klik backdrop untuk tutup
+  m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
+}
+function closeDetailModal(){ const m=document.getElementById('detail'); m.hidden = true; m.innerHTML=''; }
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+
+
 
 function getSelectedIds(){ return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id); }
 function updateBadge(){ const n=getSelectedIds().length, b=document.getElementById('cartBadge'); if(n>0){b.hidden=false;b.textContent=String(n);}else b.hidden=true; }
