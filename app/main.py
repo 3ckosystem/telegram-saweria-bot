@@ -136,6 +136,7 @@ async def _send_invites_for_invoice(inv: dict) -> None:
 
 # Serve Mini App statics
 app.mount("/webapp", StaticFiles(directory="app/webapp", html=True), name="webapp")
+app.mount("/static", StaticFiles(directory="app/webapp"), name="static")
 
 # ------------- TELEGRAM WEBHOOK -------------
 @app.post("/telegram/webhook")
