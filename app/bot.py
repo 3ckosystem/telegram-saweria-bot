@@ -145,14 +145,53 @@ def _gate_keyboard(cfg) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("✅ Saya sudah join (Re-check)", callback_data="recheck_membership")])
     return InlineKeyboardMarkup(rows)
 
-async def _count_memberships(context: ContextTypes.DEFAULT_TYPE, user_id: int, cfg) -> Tuple[int, int, int, bool]:
+def _gate_keyboard_filtered(cfg, mem_groups: List[Optional[bool]], mem_channels: List[Optional[bool]]) -> InlineKeyboardMarkup:
+    """
+    Render tombol HANYA untuk chat yang belum join (False) atau tak bisa dicek (None).
+    - Jika None, label beri hint supaya bot dijadikan admin/ditambahkan ke chat.
+    """
+    rows: List[List[InlineKeyboardButton]] = []
+
+    for i, st in enumerate(mem_groups):
+        if st is True:
+            continue  # sudah join -> sembunyikan
+        inv = cfg["group_links"][i] if i < len(cfg["group_links"]) else ""
+        usr = cfg["group_users"][i] if i < len(cfg["group_users"]) else ""
+        label = "Join Group" if (st is False) else "Join Group (bot perlu akses)"
+        rows.append([_join_button(label, inv, usr)])
+
+    for i, st in enumerate(mem_channels):
+        if st is True:
+            continue  # sudah subscribe -> sembunyikan
+        inv = cfg["chan_links"][i] if i < len(cfg["chan_links"]) else ""
+        usr = cfg["chan_users"][i] if i < len(cfg["chan_users"]) else ""
+        label = "Subscribe Channel" if (st is False) else "Subscribe Channel (bot admin)"
+        rows.append([_join_button(label, inv, usr)])
+
+    rows.append([InlineKeyboardButton("✅ Saya sudah join (Re-check)", callback_data="recheck_membership")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _count_memberships(context: ContextTypes.DEFAULT_TYPE, user_id: int, cfg) -> Tuple[int, int, int, bool, List[Optional[bool]], List[Optional[bool]]]:
+    """
+    Return:
+      ok_count, total_checkable, total_required, any_cannot_check, mem_groups, mem_channels
+    di mana mem_groups/mem_channels = list status per id:
+      True  -> terdeteksi member
+      False -> terdeteksi bukan member
+      None  -> tidak bisa diperiksa (bot bukan admin/akses ditolak)
+    """
     total_required = len(cfg["group_ids"]) + len(cfg["channel_ids"])
     ok_count = 0
     total_checkable = 0
     any_cannot_check = False
 
+    mem_groups: List[Optional[bool]] = []
+    mem_channels: List[Optional[bool]] = []
+
     for chat_id in cfg["group_ids"]:
         res = await _is_member(context, user_id, chat_id)
+        mem_groups.append(res)
         if res is None:
             any_cannot_check = True
         else:
@@ -161,13 +200,15 @@ async def _count_memberships(context: ContextTypes.DEFAULT_TYPE, user_id: int, c
 
     for chat_id in cfg["channel_ids"]:
         res = await _is_member(context, user_id, chat_id)
+        mem_channels.append(res)
         if res is None:
             any_cannot_check = True
         else:
             total_checkable += 1
             if res: ok_count += 1
 
-    return ok_count, total_checkable, total_required, any_cannot_check
+    return ok_count, total_checkable, total_required, any_cannot_check, mem_groups, mem_channels
+
 
 def _is_pass(ok_count: int, total_required: int, cfg) -> bool:
     if total_required == 0:
@@ -201,7 +242,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_webapp_button(chat_id, uid, context)
         return
 
-    ok_count, _, total_required, any_cannot_check = await _count_memberships(context, uid, cfg)
+    ok_count, _, total_required, any_cannot_check, mem_groups, mem_channels = await _count_memberships(context, uid, cfg)
     passed = _is_pass(ok_count, total_required, cfg)
 
     if passed and not any_cannot_check:
@@ -210,7 +251,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Belum lolos gate → sembunyikan keyboard "Buka Katalog" lama
     # (kirim pesan terpisah khusus untuk menghapus reply keyboard)
-    await context.bot.send_message(chat_id=chat_id, text="🔄", reply_markup=ReplyKeyboardRemove())
+    await context.bot.send_message(chat_id=chat_id, text="E n S E X l o p e d i a", reply_markup=ReplyKeyboardRemove())
 
     # Kirim instruksi + tombol Join/Subscribe + Re-check (inline)
     lines = []
@@ -223,7 +264,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append(f"Status terdeteksi: {ok_count}/{total_required} sudah join.")
     tips = _need_access_tips(cfg, any_cannot_check)
     text = "\n".join(lines) + (tips or "") + "\n\nSetelah join, klik Re-check di bawah."
-    await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=_gate_keyboard(cfg))
+    await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=_gate_keyboard_filtered(cfg, mem_groups, mem_channels))
 
 async def on_recheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -232,7 +273,7 @@ async def on_recheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat_id
     cfg = _load_gate_env()
 
-    ok_count, _, total_required, any_cannot_check = await _count_memberships(context, uid, cfg)
+    ok_count, _, total_required, any_cannot_check, mem_groups, mem_channels = await _count_memberships(context, uid, cfg)
     passed = _is_pass(ok_count, total_required, cfg)
 
     if passed and not any_cannot_check:
@@ -241,7 +282,7 @@ async def on_recheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_webapp_button(chat_id, uid, context)
     else:
         # Masih gagal → pastikan keyboard lama hilang, lalu kirim ulang tombol gate
-        await context.bot.send_message(chat_id=chat_id, text="🔄", reply_markup=ReplyKeyboardRemove())
+        await context.bot.send_message(chat_id=chat_id, text="E n S E X l o p e d i a", reply_markup=ReplyKeyboardRemove())
         min_need_info = ""
         if cfg["mode"] == "ANY":
             min_need_info = f"(minimal {max(1, min(cfg['min_count'], total_required))}) "
@@ -249,7 +290,11 @@ async def on_recheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"Belum memenuhi syarat {min_need_info}: {ok_count}/{total_required} terdeteksi join.{tips}\n\nSilakan lengkapi lalu Re-check lagi."
         )
-        await context.bot.send_message(chat_id=chat_id, text="Klik tombol di bawah untuk join/re-check:", reply_markup=_gate_keyboard(cfg))
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Klik tombol di bawah untuk join/re-check:",
+            reply_markup=_gate_keyboard_filtered(cfg, mem_groups, mem_channels)
+        )
 
 # ===================== INVITE LINK (sesuai versi stabil) =====================
 
