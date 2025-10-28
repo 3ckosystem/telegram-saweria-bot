@@ -15,6 +15,9 @@ from telegram.ext import (
     Application, CommandHandler, ContextTypes, CallbackQueryHandler
 )
 from telegram.error import Forbidden, BadRequest, RetryAfter, TimedOut, NetworkError
+from telegram.ext import MessageHandler, filters
+
+
 
 # ===================== ENV & CONFIG =====================
 
@@ -36,6 +39,36 @@ REQ_GROUP_INVITES: List[str] = _split_env("REQUIRED_GROUP_INVITES")
 REQ_CHANNEL_INVITES: List[str] = _split_env("REQUIRED_CHANNEL_INVITES")
 REQ_GROUP_USERNAMES: List[str] = _split_env("REQUIRED_GROUP_USERNAMES")
 REQ_CHANNEL_USERNAMES: List[str] = _split_env("REQUIRED_CHANNEL_USERNAMES")
+
+def _raw_env(name: str) -> str:
+    v = os.getenv(name, "")
+    # potong biar aman ditampilkan
+    return (v[:300] + "...") if len(v) > 300 else v
+
+async def gate_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    def join(lst): return ", ".join(lst) if lst else "(empty)"
+    msg = (
+        "🔎 Gate Debug\n"
+        f"- REQUIRED_MODE = {REQ_MODE}\n"
+        f"- REQUIRED_MIN_COUNT = {REQ_MIN_COUNT}\n"
+        f"- RAW REQUIRED_GROUP_IDS = { _raw_env('REQUIRED_GROUP_IDS') }\n"
+        f"- RAW REQUIRED_CHANNEL_IDS = { _raw_env('REQUIRED_CHANNEL_IDS') }\n"
+        f"- Parsed GROUP_IDS = [{join(REQ_GROUP_IDS)}]\n"
+        f"- Parsed CHANNEL_IDS = [{join(REQ_CHANNEL_IDS)}]\n"
+        f"- GROUP_INVITES = [{join(REQ_GROUP_INVITES)}]\n"
+        f"- CHANNEL_INVITES = [{join(REQ_CHANNEL_INVITES)}]\n"
+        f"- GROUP_USERNAMES = [{join(REQ_GROUP_USERNAMES)}]\n"
+        f"- CHANNEL_USERNAMES = [{join(REQ_CHANNEL_USERNAMES)}]\n"
+    )
+    await update.message.reply_text(msg)
+
+# --- di register_handlers(app) tambahkan baris ini:
+def register_handlers(app: Application):
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("gate_debug", gate_debug))  # <— debug
+    app.add_handler(CallbackQueryHandler(on_recheck, pattern="^recheck_membership$"))
+    app.add_handler(CallbackQueryHandler(lambda u, c: u.callback_query.answer(), pattern="^noop$"))
 
 REQ_MODE = (os.getenv("REQUIRED_MODE", "ALL") or "ALL").upper()  # ALL | ANY
 try:
