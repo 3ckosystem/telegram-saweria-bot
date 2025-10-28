@@ -14,6 +14,7 @@ from telegram.ext import (
     Application, CommandHandler, ContextTypes, CallbackQueryHandler
 )
 from telegram.error import Forbidden, BadRequest, RetryAfter, TimedOut, NetworkError
+from telegram.ext import MessageHandler, filters
 
 # ===================== ENV & CONFIG BASE =====================
 
@@ -40,6 +41,28 @@ ALLOWED_STATUSES = {"member", "administrator", "creator"}
 
 def build_app() -> Application:
     return Application.builder().token(BOT_TOKEN).build()
+
+async def gate_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tampilkan isi ENV gate yang dibaca bot saat runtime."""
+    envs = [
+        "REQUIRED_GROUP_IDS", "REQUIRED_CHANNEL_IDS",
+        "REQUIRED_GROUP_INVITES", "REQUIRED_CHANNEL_INVITES",
+        "REQUIRED_MODE", "REQUIRED_MIN_COUNT"
+    ]
+    out = []
+    for e in envs:
+        val = os.getenv(e, "")
+        if len(val) > 200:
+            val = val[:200] + "..."
+        out.append(f"{e} = {val or '(kosong)'}")
+    await update.message.reply_text("🔎 Gate ENV Debug:\n" + "\n".join(out))
+
+# Tambahkan handler-nya di bagian bawah:
+def register_handlers(app: Application):
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("gate_debug", gate_debug))  # ← debug
+    app.add_handler(CallbackQueryHandler(on_recheck, pattern="^recheck_membership$"))
+    app.add_handler(CallbackQueryHandler(lambda u, c: u.callback_query.answer(), pattern="^noop$"))
 
 # ===================== UTIL: WEBAPP BUTTON =====================
 
