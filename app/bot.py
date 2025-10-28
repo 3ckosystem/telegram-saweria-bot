@@ -57,12 +57,6 @@ async def gate_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         out.append(f"{e} = {val or '(kosong)'}")
     await update.message.reply_text("🔎 Gate ENV Debug:\n" + "\n".join(out))
 
-# Tambahkan handler-nya di bagian bawah:
-def register_handlers(app: Application):
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("gate_debug", gate_debug))  # ← debug
-    app.add_handler(CallbackQueryHandler(on_recheck, pattern="^recheck_membership$"))
-    app.add_handler(CallbackQueryHandler(lambda u, c: u.callback_query.answer(), pattern="^noop$"))
 
 # ===================== UTIL: WEBAPP BUTTON =====================
 
@@ -326,5 +320,6 @@ async def send_invite_link(app: Application, user_id: int, target_group_id):
 
 def register_handlers(app: Application):
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("gate_debug", gate_debug))  # pastikan debug ikut terdaftar
     app.add_handler(CallbackQueryHandler(on_recheck, pattern="^recheck_membership$"))
     app.add_handler(CallbackQueryHandler(lambda u, c: u.callback_query.answer(), pattern="^noop$"))
