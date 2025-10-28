@@ -1,4 +1,4 @@
-# --- app/bot.py (membership gate with runtime ENV reload) ---
+# --- app/bot.py (membership gate with runtime ENV reload & keyboard removal) ---
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -8,13 +8,12 @@ from typing import Any, Optional, List, Tuple, Dict
 
 from telegram import (
     Update, WebAppInfo, KeyboardButton, ReplyKeyboardMarkup,
-    InlineKeyboardButton, InlineKeyboardMarkup
+    InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 )
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, CallbackQueryHandler
 )
 from telegram.error import Forbidden, BadRequest, RetryAfter, TimedOut, NetworkError
-from telegram.ext import MessageHandler, filters
 
 # ===================== ENV & CONFIG BASE =====================
 
@@ -42,8 +41,8 @@ ALLOWED_STATUSES = {"member", "administrator", "creator"}
 def build_app() -> Application:
     return Application.builder().token(BOT_TOKEN).build()
 
+# =============== Debug helper (cek ENV gate di runtime) ===============
 async def gate_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Tampilkan isi ENV gate yang dibaca bot saat runtime."""
     envs = [
         "REQUIRED_GROUP_IDS", "REQUIRED_CHANNEL_IDS",
         "REQUIRED_GROUP_INVITES", "REQUIRED_CHANNEL_INVITES",
@@ -57,6 +56,9 @@ async def gate_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         out.append(f"{e} = {val or '(kosong)'}")
     await update.message.reply_text("🔎 Gate ENV Debug:\n" + "\n".join(out))
 
+# Optional: paksa hapus keyboard manual
+async def reset_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Keyboard dihapus.", reply_markup=ReplyKeyboardRemove(remove_keyboard=True))
 
 # ===================== UTIL: WEBAPP BUTTON =====================
 
@@ -83,7 +85,6 @@ def _split_env(name: str) -> List[str]:
     return [x.strip() for x in v.split(",") if x.strip()]
 
 def _valid_usernames(items: List[str]) -> List[str]:
-    # buang yang bukan username publik (hindari judul dengan spasi/emoji)
     return [x for x in items if _USERNAME_RE.fullmatch(x)]
 
 def _load_gate_env():
@@ -207,7 +208,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_webapp_button(chat_id, uid, context)
         return
 
-    # Belum lolos gate
+    # Belum lolos gate → sembunyikan keyboard "Buka Katalog" lama
+    # (kirim pesan terpisah khusus untuk menghapus reply keyboard)
+    await context.bot.send_message(chat_id=chat_id, text=" ", reply_markup=ReplyKeyboardRemove(remove_keyboard=True))
+
+    # Kirim instruksi + tombol Join/Subscribe + Re-check (inline)
     lines = []
     if cfg["mode"] == "ALL":
         lines.append(f"Kamu perlu join **semua** ({total_required}) grup/channel yang diwajibkan.")
@@ -231,17 +236,20 @@ async def on_recheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
     passed = _is_pass(ok_count, total_required, cfg)
 
     if passed and not any_cannot_check:
+        # Lolos → edit pesan info & kirim tombol WebApp
         await query.edit_message_text("✅ Terima kasih! Kamu sudah lolos verifikasi.")
         await _send_webapp_button(chat_id, uid, context)
     else:
+        # Masih gagal → pastikan keyboard lama hilang, lalu kirim ulang tombol gate
+        await context.bot.send_message(chat_id=chat_id, text=" ", reply_markup=ReplyKeyboardRemove(remove_keyboard=True))
         min_need_info = ""
         if cfg["mode"] == "ANY":
             min_need_info = f"(minimal {max(1, min(cfg['min_count'], total_required))}) "
         tips = _need_access_tips(cfg, any_cannot_check)
         await query.edit_message_text(
-            f"Belum memenuhi syarat {min_need_info}: {ok_count}/{total_required} terdeteksi join.{tips}\n\nSilakan lengkapi lalu Re-check lagi.",
-            reply_markup=_gate_keyboard(cfg)
+            f"Belum memenuhi syarat {min_need_info}: {ok_count}/{total_required} terdeteksi join.{tips}\n\nSilakan lengkapi lalu Re-check lagi."
         )
+        await context.bot.send_message(chat_id=chat_id, text="Klik tombol di bawah untuk join/re-check:", reply_markup=_gate_keyboard(cfg))
 
 # ===================== INVITE LINK (sesuai versi stabil) =====================
 
@@ -320,6 +328,7 @@ async def send_invite_link(app: Application, user_id: int, target_group_id):
 
 def register_handlers(app: Application):
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("gate_debug", gate_debug))  # pastikan debug ikut terdaftar
+    app.add_handler(CommandHandler("gate_debug", gate_debug))
+    app.add_handler(CommandHandler("reset_keyboard", reset_keyboard))  # opsional
     app.add_handler(CallbackQueryHandler(on_recheck, pattern="^recheck_membership$"))
     app.add_handler(CallbackQueryHandler(lambda u, c: u.callback_query.answer(), pattern="^noop$"))
