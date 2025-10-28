@@ -297,7 +297,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         min_need = max(1, cfg["min_count"])
         if total_required and min_need > total_required: min_need = total_required
         lines.append(f"Hi Kak, sebelum join ke VIP Kk diwajibkan join/subscribe **minimal {min_need}** dari {total_required} grup/channel berikut.")
-    lines.append(f"\n\nStatus terdeteksi: {ok_count}/{total_required} sudah join.")
+    lines.append(f"\nStatus terdeteksi: {ok_count}/{total_required} sudah join.")
     tips = _need_access_tips(cfg, any_cannot_check)
     text = "\n".join(lines) + (tips or "") + "\n\nSetelah join/subscribe, klik tombol Re-check di bawah."
 
