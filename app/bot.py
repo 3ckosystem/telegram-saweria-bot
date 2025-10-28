@@ -13,6 +13,7 @@ from telegram.ext import (
 from telegram.error import Forbidden, BadRequest
 from telegram.constants import ChatInviteLinkCreateLimit
 
+
 # ================== ENV ==================
 WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 
@@ -197,21 +198,29 @@ def build_app(bot_token: str) -> Application:
 
 async def send_invite_link(
     bot, user_id: int, target_chat_id: int | str,
-    creates_join_request: bool = False, expire_seconds: int | None = None
-) -> Optional[ChatInviteLink]:
+    creates_join_request: bool = False, expire_seconds: int | None = None,
+    name: str | None = None, member_limit: int | None = None
+):
     """
     Buat invite link untuk grup/channel & kirim ke user.
-    Bot harus admin (channel) / punya izin bikin link (grup).
+    - Bot harus admin (channel) / punya izin bikin link (grup).
+    - expire_seconds: jika diisi, link akan kedaluwarsa setelah detik tsb.
     """
     try:
+        expire_date = None
+        if expire_seconds:
+            expire_date = datetime.utcnow() + timedelta(seconds=int(expire_seconds))
+
         link = await bot.create_chat_invite_link(
             chat_id=target_chat_id,
+            name=name,
+            expire_date=expire_date,
+            member_limit=member_limit,
             creates_join_request=creates_join_request,
-            expire_date=None if expire_seconds is None else int(__import__("time").time()) + int(expire_seconds)
         )
         await bot.send_message(chat_id=user_id, text=f"🔗 Undangan: {link.invite_link}")
         return link
     except Exception as e:
-        # kirim info error ke user untuk debug ringan
         await bot.send_message(chat_id=user_id, text=f"Gagal membuat/kirim undangan: {e}")
         return None
+
