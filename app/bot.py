@@ -285,21 +285,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Belum lolos gate → sembunyikan keyboard "Buka Katalog" lama
-    await context.bot.send_message(chat_id=chat_id, text="🔄", reply_markup=ReplyKeyboardRemove())
+    await context.bot.send_message(chat_id=chat_id, text="EnSEXlopedia Mini Apps BOT", reply_markup=ReplyKeyboardRemove())
 
     # Kirim instruksi + tombol Join/Subscribe + Re-check (inline) — hanya yang belum join
     group_titles, channel_titles = await _resolve_titles(context, cfg)
 
     lines = []
     if cfg["mode"] == "ALL":
-        lines.append(f"Kamu perlu join **semua** ({total_required}) grup/channel yang diwajibkan.")
+        lines.append(f"Hi Kak, sebelum join ke VIP Kk diwajibkan join/subscribe **semua** ({total_required}) grup/channel berikut.")
     else:
         min_need = max(1, cfg["min_count"])
         if total_required and min_need > total_required: min_need = total_required
-        lines.append(f"Kamu perlu join **minimal {min_need}** dari {total_required} grup/channel yang diwajibkan.")
-    lines.append(f"Status terdeteksi: {ok_count}/{total_required} sudah join.")
+        lines.append(f"Hi Kak, sebelum join ke VIP Kk diwajibkan join/subscribe **minimal {min_need}** dari {total_required} grup/channel berikut.")
+    lines.append(f"\n\nStatus terdeteksi: {ok_count}/{total_required} sudah join.")
     tips = _need_access_tips(cfg, any_cannot_check)
-    text = "\n".join(lines) + (tips or "") + "\n\nSetelah join, klik Re-check di bawah."
+    text = "\n".join(lines) + (tips or "") + "\n\nSetelah join/subscribe, klik tombol Re-check di bawah."
 
     await context.bot.send_message(
         chat_id=chat_id,
@@ -322,7 +322,7 @@ async def on_recheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_webapp_button(chat_id, uid, context)
     else:
         # Pastikan keyboard lama hilang
-        await context.bot.send_message(chat_id=chat_id, text="🔄", reply_markup=ReplyKeyboardRemove())
+        await context.bot.send_message(chat_id=chat_id, text="EnSEXlopedia Mini Apps BOT", reply_markup=ReplyKeyboardRemove())
 
         min_need_info = ""
         if cfg["mode"] == "ANY":
