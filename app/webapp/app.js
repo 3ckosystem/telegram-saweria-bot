@@ -45,7 +45,7 @@ function renderNeonList(groups) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn-outline';
-    btn.textContent = 'Tambah ke Keranjang';
+    btn.textContent = 'Pilih Grup';
 
     // === BEHAVIOR BARU ===
     // 1) Klik tombol: toggle select (HANYA di tombol)
@@ -82,7 +82,7 @@ function toggleSelect(card){
 
 function updateButtonState(card, btn){
   const selected = card.classList.contains('selected');
-  btn.textContent = selected ? 'Hapus dari Keranjang' : 'Tambah ke Keranjang';
+  btn.textContent = selected ? 'Batal' : 'Pilih Grup';
 }
 
 function openDetailModal(item){
@@ -97,7 +97,7 @@ function openDetailModal(item){
       <div class="desc">${escapeHtml(item.desc || '')}</div>
       <div class="row">
         <button class="close">Tutup</button>
-        <button class="add">${selected ? 'Hapus dari Keranjang' : 'Tambah ke Keranjang'}</button>
+        <button class="add">${selected ? 'Batal' : 'Pilih Grup'}</button>
       </div>
     </div>
   `;
