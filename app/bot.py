@@ -210,7 +210,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Belum lolos gate → sembunyikan keyboard "Buka Katalog" lama
     # (kirim pesan terpisah khusus untuk menghapus reply keyboard)
-    await context.bot.send_message(chat_id=chat_id, text=" ", reply_markup=ReplyKeyboardRemove())
+    await context.bot.send_message(chat_id=chat_id, text="\u200B", reply_markup=ReplyKeyboardRemove())
 
     # Kirim instruksi + tombol Join/Subscribe + Re-check (inline)
     lines = []
@@ -241,7 +241,7 @@ async def on_recheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_webapp_button(chat_id, uid, context)
     else:
         # Masih gagal → pastikan keyboard lama hilang, lalu kirim ulang tombol gate
-        await context.bot.send_message(chat_id=chat_id, text=" ", reply_markup=ReplyKeyboardRemove())
+        await context.bot.send_message(chat_id=chat_id, text="\u200B", reply_markup=ReplyKeyboardRemove())
         min_need_info = ""
         if cfg["mode"] == "ANY":
             min_need_info = f"(minimal {max(1, min(cfg['min_count'], total_required))}) "
