@@ -16,6 +16,7 @@ from telegram.error import Forbidden, BadRequest
 
 from .bot import build_app, register_handlers, send_invite_link
 from . import payments, storage
+from copy import deepcopy
 
 # === penting: import fungsi scraper (signature baru: invoice_id & amount)
 from .scraper import (
@@ -368,18 +369,21 @@ async def create_invoice(payload: CreateInvoiceIn):
 @app.get("/api/config")
 async def get_config():
     try:
-        # Inject random image per grup sesuai folder — default: per-request (tanpa cache)
-        for g in GROUPS:
-            if not g.get("image"):
-                folder = str(g.get("image_folder") or "").strip()
-                if folder:
-                    img = await _pick_random_image_from_folder(folder)
-                    if img:
-                        g["image"] = img
-        return {"price_idr": PRICE_IDR, "groups": GROUPS}
+        result_groups = deepcopy(GROUPS)  # <-- jangan mutate GROUPS global
+        # Pilih gambar acak SETIAP request (jika image_folder ada)
+        for g in result_groups:
+            folder = str(g.get("image_folder") or "").strip()
+            if folder:
+                img = await _pick_random_image_from_folder(folder)
+                if img:
+                    g["image"] = img
+            # kalau folder kosong tapi image manual sudah ada, biarkan saja
+        return {"price_idr": PRICE_IDR, "groups": result_groups}
     except Exception as e:
         print("[config] random image error:", e)
-        return {"price_idr": PRICE_IDR, "groups": GROUPS}
+        # fallback tanpa gambar acak
+        return {"price_idr": PRICE_IDR, "groups": deepcopy(GROUPS)}
+
 
 
 # ------------- API: STATUS & QR IMAGE -------------
