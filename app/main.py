@@ -32,9 +32,10 @@ BASE_URL = os.environ["BASE_URL"].strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 ENV = os.getenv("ENV", "dev")  # "prod" di Railway untuk mematikan debug endpoints
 
-# NEW: ImageKit config (opsional)
-IMAGEKIT_PUBLIC_KEY = os.getenv("IMAGEKIT_PUBLIC_KEY", "").strip()           # contoh: ik_public_xxx
-IMAGEKIT_BASE_URL   = (os.getenv("IMAGEKIT_BASE_URL", "").rstrip("/"))       # contoh: https://ik.imagekit.io/3ckosystem
+# was:
+# IMAGEKIT_PUBLIC_KEY = os.getenv("IMAGEKIT_PUBLIC_KEY", "").strip()
+IMAGEKIT_PRIVATE_KEY = os.getenv("IMAGEKIT_PRIVATE_KEY", "").strip()
+IMAGEKIT_BASE_URL   = (os.getenv("IMAGEKIT_BASE_URL", "").rstrip("/"))
 
 def _split_env(name: str) -> List[str]:
     v = os.getenv(name, "") or ""
@@ -177,11 +178,7 @@ except Exception:
 # --- Helper ambil gambar random dari folder ImageKit ---
 
 async def _imagekit_list_files_by_path(path: str) -> List[str]:
-    """
-    List file gambar via ImageKit API (butuh IMAGEKIT_PUBLIC_KEY).
-    Return: list URL absolut.
-    """
-    if not IMAGEKIT_PUBLIC_KEY:
+    if not IMAGEKIT_PRIVATE_KEY:
         return []
     if not path.startswith("/"):
         path = "/" + path
@@ -189,7 +186,8 @@ async def _imagekit_list_files_by_path(path: str) -> List[str]:
     try:
         async with httpx.AsyncClient(timeout=12) as client:
             r = await client.get(api, headers={
-                "Authorization": "Basic " + base64.b64encode(f"{IMAGEKIT_PUBLIC_KEY}:".encode()).decode()
+                # was: Authorization: Basic base64(public_key + ":")
+                "Authorization": "Basic " + base64.b64encode(f"{IMAGEKIT_PRIVATE_KEY}:".encode()).decode()
             })
         r.raise_for_status()
         data = r.json()
@@ -197,6 +195,7 @@ async def _imagekit_list_files_by_path(path: str) -> List[str]:
     except Exception as e:
         print("[ImageKitAPI] list files error:", e)
         return []
+
 
 async def _scrape_folder_for_images(url: str) -> List[str]:
     """
@@ -246,8 +245,10 @@ async def _pick_random_image_from_folder(folder_field: str) -> Optional[str]:
         folder_url = (IMAGEKIT_BASE_URL + path) if IMAGEKIT_BASE_URL else ""
 
     files: List[str] = []
-    if IMAGEKIT_PUBLIC_KEY and path:
+    # was: if IMAGEKIT_PUBLIC_KEY and path:
+    if IMAGEKIT_PRIVATE_KEY and path:
         files = await _imagekit_list_files_by_path(path)
+
 
     if not files and folder_url:
         files = await _scrape_folder_for_images(folder_url)
