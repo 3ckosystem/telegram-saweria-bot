@@ -1,6 +1,7 @@
 # app/main.py
 import os, json, re, base64, hmac, hashlib, httpx
 import asyncio
+import random
 from typing import Optional, List
 
 from pydantic import BaseModel
@@ -30,6 +31,10 @@ bot_check = Bot(BOT_TOKEN)
 BASE_URL = os.environ["BASE_URL"].strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 ENV = os.getenv("ENV", "dev")  # "prod" di Railway untuk mematikan debug endpoints
+
+# NEW: ImageKit config (opsional)
+IMAGEKIT_PUBLIC_KEY = os.getenv("IMAGEKIT_PUBLIC_KEY", "").strip()           # contoh: ik_public_xxx
+IMAGEKIT_BASE_URL   = (os.getenv("IMAGEKIT_BASE_URL", "").rstrip("/"))       # contoh: https://ik.imagekit.io/3ckosystem
 
 def _split_env(name: str) -> List[str]:
     v = os.getenv(name, "") or ""
@@ -122,10 +127,18 @@ def _parse_groups_from_any(data):
                 init = str(v.get("initial") or "").strip()
                 desc = str(v.get("desc") or v.get("description") or "").strip()
                 image = str(v.get("image") or v.get("img") or "").strip()
+                # NEW: folder per grup (boleh gunakan salah satu key di bawah)
+                img_folder = str(
+                    v.get("image_folder") or v.get("img_folder") or v.get("folder") or v.get("imgDir") or ""
+                ).strip()
             else:
                 gid, nm, init, desc, image = str(k).strip(), str(v).strip(), "", "", ""
+                img_folder = ""
             if gid and nm:
-                groups.append({"id": gid, "name": nm, "initial": init, "desc": desc, "image": image})
+                groups.append({
+                    "id": gid, "name": nm, "initial": init, "desc": desc, "image": image,
+                    "image_folder": img_folder
+                })
 
     elif isinstance(data, list):
         for it in data:
@@ -135,12 +148,19 @@ def _parse_groups_from_any(data):
                 init = str(it.get("initial") or "").strip()
                 desc = str(it.get("desc") or it.get("description") or "").strip()
                 image = str(it.get("image") or it.get("img") or "").strip()
+                # NEW: folder per grup (alias key)
+                img_folder = str(
+                    it.get("image_folder") or it.get("img_folder") or it.get("folder") or it.get("imgDir") or ""
+                ).strip()
                 if gid and nm:
-                    groups.append({"id": gid, "name": nm, "initial": init, "desc": desc, "image": image})
+                    groups.append({
+                        "id": gid, "name": nm, "initial": init, "desc": desc, "image": image,
+                        "image_folder": img_folder
+                    })
             else:
                 gid = str(it).strip()
                 if gid:
-                    groups.append({"id": gid, "name": gid, "initial": "", "desc": "", "image": ""})
+                    groups.append({"id": gid, "name": gid, "initial": "", "desc": "", "image": "", "image_folder": ""})
     return groups
 
 
@@ -152,6 +172,90 @@ try:
     PRICE_IDR = int(os.environ.get("PRICE_IDR", "25000"))
 except Exception:
     PRICE_IDR = 25000
+
+
+# --- Helper ambil gambar random dari folder ImageKit ---
+
+async def _imagekit_list_files_by_path(path: str) -> List[str]:
+    """
+    List file gambar via ImageKit API (butuh IMAGEKIT_PUBLIC_KEY).
+    Return: list URL absolut.
+    """
+    if not IMAGEKIT_PUBLIC_KEY:
+        return []
+    if not path.startswith("/"):
+        path = "/" + path
+    api = f"https://api.imagekit.io/v1/files?path={path}"
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            r = await client.get(api, headers={
+                "Authorization": "Basic " + base64.b64encode(f"{IMAGEKIT_PUBLIC_KEY}:".encode()).decode()
+            })
+        r.raise_for_status()
+        data = r.json()
+        return [f["url"] for f in data if f.get("fileType") == "image"]
+    except Exception as e:
+        print("[ImageKitAPI] list files error:", e)
+        return []
+
+async def _scrape_folder_for_images(url: str) -> List[str]:
+    """
+    Fallback: GET folder URL (HTML indexing) lalu regex semua *.jpg/png/webp.
+    Return: list URL absolut.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url)
+        html = resp.text
+        names = re.findall(r'([\w\-\./%]+?\.(?:jpg|jpeg|png|webp))', html, flags=re.I)
+        out = []
+        for n in names:
+            if n.startswith("http"):
+                out.append(n)
+            else:
+                base = url.rstrip("/") + "/"
+                out.append(base + n.lstrip("/"))
+        # deduplicate
+        seen, uniq = set(), []
+        for u in out:
+            if u not in seen:
+                uniq.append(u); seen.add(u)
+        return uniq
+    except Exception as e:
+        print("[ImageScrape] error:", e)
+        return []
+
+async def _pick_random_image_from_folder(folder_field: str) -> Optional[str]:
+    """
+    Terima 'folder_field' bisa berupa PATH (/groups/escort) atau URL penuh.
+    Prioritas:
+      1) ImageKit API (kalau public key ada & bisa derive path dengan IMAGEKIT_BASE_URL)
+      2) Scrape listing (kalau URL penuh dan bisa diindex)
+    """
+    if not folder_field:
+        return None
+
+    is_url = folder_field.startswith("http://") or folder_field.startswith("https://")
+    if is_url:
+        folder_url = folder_field.rstrip("/")
+        path = ""
+        if IMAGEKIT_BASE_URL and folder_url.startswith(IMAGEKIT_BASE_URL):
+            path = folder_url[len(IMAGEKIT_BASE_URL):] or "/"
+    else:
+        path = folder_field if folder_field.startswith("/") else ("/" + folder_field)
+        folder_url = (IMAGEKIT_BASE_URL + path) if IMAGEKIT_BASE_URL else ""
+
+    files: List[str] = []
+    if IMAGEKIT_PUBLIC_KEY and path:
+        files = await _imagekit_list_files_by_path(path)
+
+    if not files and folder_url:
+        files = await _scrape_folder_for_images(folder_url)
+
+    images = [u for u in files if re.search(r'\.(jpg|jpeg|png|webp)(\?|$)', u, re.I)]
+    if not images:
+        return None
+    return random.choice(images)
 
 
 # ------------- APP & BOT -------------
@@ -261,11 +365,20 @@ async def create_invoice(payload: CreateInvoiceIn):
 
 # ------------- API: CONFIG -------------
 @app.get("/api/config")
-def get_config():
+async def get_config():
     try:
+        # Inject random image per grup sesuai folder — default: per-request (tanpa cache)
+        for g in GROUPS:
+            if not g.get("image"):
+                folder = str(g.get("image_folder") or "").strip()
+                if folder:
+                    img = await _pick_random_image_from_folder(folder)
+                    if img:
+                        g["image"] = img
         return {"price_idr": PRICE_IDR, "groups": GROUPS}
-    except Exception:
-        return {"price_idr": 25000, "groups": []}
+    except Exception as e:
+        print("[config] random image error:", e)
+        return {"price_idr": PRICE_IDR, "groups": GROUPS}
 
 
 # ------------- API: STATUS & QR IMAGE -------------
