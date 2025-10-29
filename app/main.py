@@ -37,6 +37,11 @@ ENV = os.getenv("ENV", "dev")  # "prod" di Railway untuk mematikan debug endpoin
 # IMAGEKIT_PUBLIC_KEY = os.getenv("IMAGEKIT_PUBLIC_KEY", "").strip()
 IMAGEKIT_PRIVATE_KEY = os.getenv("IMAGEKIT_PRIVATE_KEY", "").strip()
 IMAGEKIT_BASE_URL   = (os.getenv("IMAGEKIT_BASE_URL", "").rstrip("/"))
+IMAGEKIT_CACHE_TTL = int(os.getenv("IMAGEKIT_CACHE_TTL", "900"))
+IMAGEKIT_IMG_WIDTH = int(os.getenv("IMAGEKIT_IMG_WIDTH", "600"))
+IMAGEKIT_PER_REQUEST_TIMEOUT = float(os.getenv("IMAGEKIT_PER_REQUEST_TIMEOUT", "6"))
+# cache sederhana di memori: { "/M": {"exp": ts, "items": [urls...] } }
+_IMAGEKIT_CACHE: dict[str, dict] = {}
 
 def _split_env(name: str) -> List[str]:
     v = os.getenv(name, "") or ""
@@ -178,24 +183,60 @@ except Exception:
 
 # --- Helper ambil gambar random dari folder ImageKit ---
 
+def _norm_folder_to_path(folder: str) -> str:
+    """Terima path '/M' atau URL penuh '.../M/' → balikan path '/M'."""
+    if not folder:
+        return ""
+    s = folder.strip()
+    if s.startswith("http://") or s.startswith("https://"):
+        if IMAGEKIT_BASE_URL and s.startswith(IMAGEKIT_BASE_URL):
+            s = s[len(IMAGEKIT_BASE_URL):]
+        # buang query/fragment
+        s = s.split("?", 1)[0].split("#", 1)[0]
+    if not s.startswith("/"):
+        s = "/" + s
+    # pastikan tanpa trailing slash agar konsisten di API path query
+    # (ImageKit menerima '/M' atau '/M/', tapi kita konsistenkan)
+    if len(s) > 1 and s.endswith("/"):
+        s = s[:-1]
+    return s
+
 async def _imagekit_list_files_by_path(path: str) -> List[str]:
+    """Ambil daftar URL file gambar dari folder pakai API (dengan cache)."""
     if not IMAGEKIT_PRIVATE_KEY:
         return []
-    if not path.startswith("/"):
-        path = "/" + path
-    api = f"https://api.imagekit.io/v1/files?path={path}"
+
+    # CACHE HIT
+    now = asyncio.get_event_loop().time()
+    ent = _IMAGEKIT_CACHE.get(path)
+    if ent and ent.get("exp", 0) > now and ent.get("items"):
+        return ent["items"]
+
+    # FETCH (limit 100 sudah cukup untuk randomizer)
+    url = "https://api.imagekit.io/v1/files"
+    params = {"path": path, "limit": 100}
     try:
-        async with httpx.AsyncClient(timeout=12) as client:
-            r = await client.get(api, headers={
-                # was: Authorization: Basic base64(public_key + ":")
-                "Authorization": "Basic " + base64.b64encode(f"{IMAGEKIT_PRIVATE_KEY}:".encode()).decode()
-            })
+        async with httpx.AsyncClient(timeout=IMAGEKIT_PER_REQUEST_TIMEOUT) as client:
+            r = await client.get(
+                url,
+                params=params,
+                headers={
+                    "Authorization": "Basic " + base64.b64encode(f"{IMAGEKIT_PRIVATE_KEY}:".encode()).decode()
+                },
+            )
         r.raise_for_status()
         data = r.json()
-        return [f["url"] for f in data if f.get("fileType") == "image"]
+        items = [f["url"] for f in data if f.get("fileType") == "image" and f.get("url")]
+        # set cache
+        _IMAGEKIT_CACHE[path] = {"exp": now + IMAGEKIT_CACHE_TTL, "items": items}
+        return items
     except Exception as e:
-        print("[ImageKitAPI] list files error:", e)
+        print("[ImageKit] list files error:", e)
+        # fallback: gunakan cache lama jika masih ada meskipun expired
+        if ent and ent.get("items"):
+            return ent["items"]
         return []
+
 
 
 async def _scrape_folder_for_images(url: str) -> List[str]:
@@ -225,39 +266,19 @@ async def _scrape_folder_for_images(url: str) -> List[str]:
         print("[ImageScrape] error:", e)
         return []
 
-async def _pick_random_image_from_folder(folder_field: str) -> Optional[str]:
-    """
-    Terima 'folder_field' bisa berupa PATH (/groups/escort) atau URL penuh.
-    Prioritas:
-      1) ImageKit API (kalau public key ada & bisa derive path dengan IMAGEKIT_BASE_URL)
-      2) Scrape listing (kalau URL penuh dan bisa diindex)
-    """
-    if not folder_field:
+async def _pick_random_image_from_folder(folder: str) -> Optional[str]:
+    """Pilih 1 URL gambar secara acak dari folder ImageKit (gunakan transform)."""
+    path = _norm_folder_to_path(folder)
+    if not path:
         return None
-
-    is_url = folder_field.startswith("http://") or folder_field.startswith("https://")
-    if is_url:
-        folder_url = folder_field.rstrip("/")
-        path = ""
-        if IMAGEKIT_BASE_URL and folder_url.startswith(IMAGEKIT_BASE_URL):
-            path = folder_url[len(IMAGEKIT_BASE_URL):] or "/"
-    else:
-        path = folder_field if folder_field.startswith("/") else ("/" + folder_field)
-        folder_url = (IMAGEKIT_BASE_URL + path) if IMAGEKIT_BASE_URL else ""
-
-    files: List[str] = []
-    # was: if IMAGEKIT_PUBLIC_KEY and path:
-    if IMAGEKIT_PRIVATE_KEY and path:
-        files = await _imagekit_list_files_by_path(path)
-
-
-    if not files and folder_url:
-        files = await _scrape_folder_for_images(folder_url)
-
-    images = [u for u in files if re.search(r'\.(jpg|jpeg|png|webp)(\?|$)', u, re.I)]
-    if not images:
+    files = await _imagekit_list_files_by_path(path)
+    if not files:
         return None
-    return random.choice(images)
+    import random
+    url = random.choice(files)
+    # tambahkan transform ringan agar cepat (ignorant query aman di ImageKit)
+    # contoh: https://.../file.jpg?tr=w-600,fo-auto
+    return f"{url}?tr=w-{IMAGEKIT_IMG_WIDTH},fo-auto"
 
 
 # ------------- APP & BOT -------------
@@ -369,20 +390,21 @@ async def create_invoice(payload: CreateInvoiceIn):
 @app.get("/api/config")
 async def get_config():
     try:
-        result_groups = deepcopy(GROUPS)  # <-- jangan mutate GROUPS global
-        # Pilih gambar acak SETIAP request (jika image_folder ada)
-        for g in result_groups:
+        result_groups = deepcopy(GROUPS)  # jangan ubah global
+        # buat task paralel untuk set image dari folder
+        async def enrich(g: dict):
             folder = str(g.get("image_folder") or "").strip()
             if folder:
                 img = await _pick_random_image_from_folder(folder)
                 if img:
                     g["image"] = img
-            # kalau folder kosong tapi image manual sudah ada, biarkan saja
+
+        await asyncio.gather(*(enrich(g) for g in result_groups))
         return {"price_idr": PRICE_IDR, "groups": result_groups}
     except Exception as e:
         print("[config] random image error:", e)
-        # fallback tanpa gambar acak
         return {"price_idr": PRICE_IDR, "groups": deepcopy(GROUPS)}
+
 
 
 
@@ -642,7 +664,24 @@ async def on_start():
         )
     else:
         print("Skipping set_webhook: BASE_URL must start with https://")
+
+    # --- prewarm ImageKit folder cache (agar first load cepat) ---
+    try:
+        folders = []
+        for g in GROUPS:
+            fld = str(g.get("image_folder") or "").strip()
+            if fld:
+                p = _norm_folder_to_path(fld)
+                if p not in folders:
+                    folders.append(p)
+        if folders and IMAGEKIT_PRIVATE_KEY:
+            await asyncio.gather(*(_imagekit_list_files_by_path(p) for p in folders))
+            print(f"[startup] Prefetched ImageKit folders: {len(folders)}")
+    except Exception as e:
+        print("[startup] prewarm image folders failed:", e)
+
     await bot_app.start()
+
 
 @app.on_event("shutdown")
 async def on_stop():
