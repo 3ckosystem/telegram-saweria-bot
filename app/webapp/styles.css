@@ -25,15 +25,29 @@
   font-weight:900; font-size:20px; line-height:1.15;
   word-break:break-word; overflow-wrap:break-word;
 }
+
+/* Deskripsi di kartu: clamp 3 baris */
 .desc{
   color:var(--muted); font-size:14px; line-height:1.35;
   word-break:break-word; overflow-wrap:break-word;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;
+  overflow:hidden;
 }
 
+/* Tombol di kartu: rata kanan, berwarna saat belum dipilih, outline saat terpilih */
 .btn-outline{
-  align-self:flex-start; height:40px; padding:0 16px; border-radius:16px;
-  display:inline-grid; place-items:center; font-size:14px; color:#ffa0b0;
-  background:transparent; border:1.5px solid var(--stroke);
+  align-self:flex-end;            /* RATA KANAN */
+  height:40px; padding:0 16px; border-radius:16px;
+  display:inline-grid; place-items:center; font-size:14px;
+  background:var(--accent);       /* WARNA AKTIF */
+  color:#fff;
+  border:1.8px solid var(--accent);
+  transition:all .22s ease;
+}
+.card.selected .btn-outline{
+  background:transparent;         /* TIDAK BERWARNA SAAT TERPILIH */
+  color:var(--accent);
+  border-color:var(--accent);
 }
 
 .card.selected{ outline:2px solid var(--accent); box-shadow:0 0 22px rgba(255,35,69,.25) }
@@ -53,10 +67,7 @@
   border:1px solid #ffffff14; padding:10px 14px; border-radius:12px; cursor:pointer }
 
 /* Pastikan modal benar-benar lenyap saat hidden */
-.qr-modal[hidden]{
-  display: none !important;
-  pointer-events: none !important;
-}
+.qr-modal[hidden]{ display:none !important; pointer-events:none !important; }
 
 /* Feel lebih klik di mobile */
 .btn-outline, .cta {
@@ -72,8 +83,25 @@
 
 .modal > .sheet{ width:min(640px,100%); max-height:88vh; overflow:auto; background:#0f0f10;
   border:1px solid #ffffff14; border-radius:16px; padding:16px; color:#fff }
-.sheet .hero{ width:100%; aspect-ratio:16/9; border-radius:12px; background:#1c0f12;
-  background-size:cover; background-position:center; border:1px solid #ffffff14; }
+
+/* HERO mengikuti rasio asli gambar (portrait/landscape) */
+.sheet .hero{
+  width:100%;
+  max-height:70vh;               /* batasi tinggi agar tidak melebihi layar */
+  border-radius:12px;
+  background:#1c0f12;
+  border:1px solid #ffffff14;
+  display:flex; align-items:center; justify-content:center;
+  margin-bottom:12px; overflow:hidden;
+}
+.sheet .hero img{
+  max-width:100%;
+  max-height:70vh;
+  width:auto; height:auto;
+  object-fit:contain;            /* jaga rasio asli */
+  display:block;
+}
+
 .sheet .title{ font-size:22px; font-weight:900; margin:12px 0 6px }
 .sheet .desc{ color:#cdd0d4; font-size:14px; line-height:1.45; white-space:pre-wrap }
 .sheet .row{ display:flex; gap:10px; margin-top:12px }
@@ -85,10 +113,3 @@
 
 /* tombol di kartu tetap klik-able */
 .btn-outline, .cta { cursor:pointer; -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
-
-.card-desc {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;         /* atur jumlah baris visual */
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}

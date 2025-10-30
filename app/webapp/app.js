@@ -126,7 +126,9 @@ function openDetailModal(item){
 
   m.innerHTML = `
     <div class="sheet">
-      <div class="hero" style="${item.image ? `background-image:url('${item.image}')` : ''}"></div>
+      <div class="hero">
+        ${item.image ? `<img src="${item.image}" alt="${escapeHtml(item.name)}">` : ''}
+      </div>
       <div class="title">${escapeHtml(item.name)}</div>
       <div class="desc">${escapeHtml(item.desc || '')}</div>
       <div class="row">
@@ -142,9 +144,9 @@ function openDetailModal(item){
     if (card) toggleSelect(card);
     closeDetailModal();
   });
-  // klik backdrop untuk tutup
   m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
 }
+
 
 function closeDetailModal(){ 
   const m = document.getElementById('detail'); 
