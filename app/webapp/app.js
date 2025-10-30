@@ -6,8 +6,9 @@ let PRICE_PER_GROUP = 25000;
 let LOADED_GROUPS = [];
 
 // ====== Config truncate ======
-const MAX_DESC_CHARS = 120;
+const MAX_DESC_CHARS = 120; // ubah sesuai kebutuhan
 
+// Truncate aman emoji + potong di batas kata
 function truncateText(text, max = MAX_DESC_CHARS) {
   if (!text) return "";
   try {
@@ -29,34 +30,15 @@ function truncateText(text, max = MAX_DESC_CHARS) {
 
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    const r = await fetch('/api/config?t=' + Date.now(), { cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const r = await fetch('/api/config', { cache: 'no-store' });
     const cfg = await r.json();
     PRICE_PER_GROUP = parseInt(cfg?.price_idr ?? '25000', 10) || 25000;
     LOADED_GROUPS = Array.isArray(cfg?.groups) ? cfg.groups : [];
-  } catch (e) {
-    console.error('Gagal ambil /api/config:', e);
-  }
-
-  if (!LOADED_GROUPS?.length) {
-    renderFallbackEmpty();
-  } else {
-    renderNeonList(LOADED_GROUPS);
-  }
-
+  } catch {}
+  renderNeonList(LOADED_GROUPS);
   syncTotalText();
   document.getElementById('pay')?.addEventListener('click', onPay);
 });
-
-function renderFallbackEmpty() {
-  const root = document.getElementById('list');
-  root.innerHTML = `
-    <div style="padding:16px;color:#cdd0d4">
-      Tidak ada data grup untuk ditampilkan.<br/>
-      Cek <code>GROUP_IDS_JSON</code> di server atau reload.
-    </div>
-  `;
-}
 
 function renderNeonList(groups) {
   const root = document.getElementById('list');
@@ -68,7 +50,6 @@ function renderNeonList(groups) {
     const desc = String(g.desc ?? '').trim();
     const longDesc = String(g.long_desc ?? desc).trim();
     const img  = String(g.image ?? '').trim();
-    const imageFolder = String(g.image_folder ?? '').trim();
 
     const card = document.createElement('article');
     card.className = 'card';
@@ -99,20 +80,17 @@ function renderNeonList(groups) {
     btn.style.marginLeft = 'auto';
     btn.textContent = 'Pilih Grup';
 
+    // 1) Klik tombol: toggle select
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       toggleSelect(card);
     });
 
+    // 2) Klik kartu (kecuali tombol): buka modal detail (dengan carousel)
     card.addEventListener('click', (e) => {
       if (btn.contains(e.target)) return;
-      openDetailModal({
-        id, name,
-        desc: longDesc || desc,
-        image: img,
-        image_folder: imageFolder
-      });
+      openDetailModal({ id, name, desc: longDesc || desc, image: img });
     });
 
     meta.append(title, p, btn);
@@ -141,24 +119,23 @@ function updateButtonState(card, btn){
   if (!btn.style.marginLeft) btn.style.marginLeft = 'auto';
 }
 
-/* =======================
-   DETAIL MODAL + CAROUSEL
-   ======================= */
-let _carouselTimer = null;
-const ROTATE_MS = 4000;
+/* ---------- Detail Modal + Carousel ---------- */
 
 async function openDetailModal(item){
   const m = document.getElementById('detail');
   const card = document.querySelector(`.card[data-id="${CSS.escape(item.id)}"]`);
   const selected = card?.classList.contains('selected');
 
+  // Ambil daftar gambar:
+  const images = await fetchImagesForItem(item);
+
   m.innerHTML = `
     <div class="sheet" id="sheet">
-      <div class="hero" id="hero">
-        <div class="carousel" id="carousel" aria-live="polite">
-          <button class="nav prev" id="cPrev" aria-label="Sebelumnya">‹</button>
-          <img id="cImg" alt="${escapeHtml(item.name)}"/>
-          <button class="nav next" id="cNext" aria-label="Berikutnya">›</button>
+      <div class="hero">
+        <div class="carousel" id="carousel" data-idx="0">
+          <button class="nav prev" aria-label="Sebelumnya">‹</button>
+          <img id="cImg" src="" alt="${escapeHtml(item.name)}">
+          <button class="nav next" aria-label="Berikutnya">›</button>
           <div class="dots" id="cDots"></div>
         </div>
       </div>
@@ -172,145 +149,118 @@ async function openDetailModal(item){
   `;
   m.hidden = false;
 
-  const sheet = document.getElementById('sheet');
-  const hero  = document.getElementById('hero');
-  const cImg  = document.getElementById('cImg');
-  const cPrev = document.getElementById('cPrev');
-  const cNext = document.getElementById('cNext');
-  const cDots = document.getElementById('cDots');
-  const ttl   = document.getElementById('ttl');
-  const dsc   = document.getElementById('dsc');
-  const btns  = document.getElementById('btns');
+  // Inisialisasi carousel
+  initCarousel(images);
 
-  let images = await loadImagesForItem(item);
-  if (!images.length && item.image) images = [item.image];
-
-  let idx = 0;
-
-  const renderDots = () => {
-    if (images.length <= 1) { cDots.innerHTML = ''; return; }
-    cDots.innerHTML = images.map((_, i) =>
-      `<span class="dot ${i===idx?'active':''}" data-i="${i}"></span>`).join('');
-    cDots.querySelectorAll('.dot').forEach(el => {
-      el.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        idx = parseInt(el.dataset.i,10)||0;
-        renderSlide(true);
-      });
-    });
-  };
-
-  const renderSlide = (userAction = false) => {
-    if (!images.length) { hero.style.display='none'; return; }
-    hero.style.display='';
-    cImg.src = images[idx];
-    renderDots();
-    if (userAction) restartAutoRotate();
-  };
-
-  const restartAutoRotate = () => {
-    if (_carouselTimer) clearInterval(_carouselTimer);
-    if (images.length > 1) {
-      _carouselTimer = setInterval(() => {
-        idx = (idx + 1) % images.length;
-        renderSlide(false);
-      }, ROTATE_MS);
-    }
-  };
-
-  cPrev.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (!images.length) return;
-    idx = (idx - 1 + images.length) % images.length;
-    renderSlide(true);
-  });
-  cNext.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (!images.length) return;
-    idx = (idx + 1) % images.length;
-    renderSlide(true);
-  });
-
-  addSwipe(document.getElementById('carousel'),
-    () => cPrev.click(),
-    () => cNext.click()
-  );
-
-  // === Fit image tanpa zoom (rasio asli) ===
-  const fitHero = () => {
-    const vh = window.innerHeight;
-    const styles = getComputedStyle(sheet);
-    const pad = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
-    const gaps = 12 * 2;
-    const nonImg = ttl.offsetHeight + dsc.offsetHeight + btns.offsetHeight + pad + gaps;
-    const target = Math.max(220, Math.min(vh * 0.98 - nonImg, vh * 0.92)); // ketinggian maksimum gambar
-
-    hero.style.maxHeight = `${Math.floor(target)}px`;
-    hero.style.height = 'auto';
-
-    // KUNCI: jangan pakai height:100% atau object-fit
-    // biar tidak ter-zoom, cukup batasi max-height & max-width
-    cImg.style.maxHeight = `${Math.floor(target)}px`;
-    cImg.style.maxWidth = '100%';
-    cImg.style.width = 'auto';
-    cImg.style.height = 'auto';
-  };
-
-  cImg.addEventListener('load', fitHero);
-  window.addEventListener('resize', fitHero, { passive:true });
-
-  renderSlide(false);
-  restartAutoRotate();
-  fitHero();
-
+  // Action buttons
   m.querySelector('.close')?.addEventListener('click', () => closeDetailModal());
-  m.querySelector('.add')?.addEventListener('click', () => { if (card) toggleSelect(card); closeDetailModal(); });
-  m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
-}
-
-async function loadImagesForItem(item){
-  const folder = (item.image_folder || "").trim();
-  if (!folder) return item.image ? [item.image] : [];
-  try {
-    const url = `/api/images?folder=${encodeURIComponent(folder)}&t=${Date.now()}`;
-    const r = await fetch(url, { cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const data = await r.json();
-    const arr = Array.isArray(data?.items) ? data.items
-              : Array.isArray(data?.images) ? data.images
-              : [];
-    return arr.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, 12);
-  } catch (e) {
-    console.warn('[carousel] fallback single image. Error:', e);
-    return item.image ? [item.image] : [];
-  }
-}
-
-function addSwipe(el, onLeft, onRight){
-  let x0 = null, y0 = null, t0 = 0;
-  const TH = 30;
-  el.addEventListener('touchstart', (e) => {
-    const t = e.touches[0];
-    x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
-  }, {passive:true});
-  el.addEventListener('touchend', (e) => {
-    if (x0 == null) return;
-    const dx = (e.changedTouches[0].clientX - x0);
-    const dy = (e.changedTouches[0].clientY - y0);
-    const dt = Date.now() - t0;
-    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > TH && dt < 600) {
-      if (dx < 0) onRight?.(); else onLeft?.();
-    }
-    x0 = y0 = null;
+  m.querySelector('.add')?.addEventListener('click', () => {
+    if (card) toggleSelect(card);
+    closeDetailModal();
   });
+  m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
 }
 
 function closeDetailModal(){
   const m = document.getElementById('detail');
-  if (_carouselTimer) { clearInterval(_carouselTimer); _carouselTimer = null; }
   m.hidden = true;
   m.innerHTML = '';
 }
+
+/** Ambil list gambar untuk modal:
+ *  - Jika group punya `image_folder` → GET /api/images?gid=<id> (atau folder)
+ *  - Else kalau `image` ada → [image]
+ */
+async function fetchImagesForItem(item){
+  try {
+    // Prefer /api/images by group id (server akan mapping id -> folder)
+    const url = `/api/images?gid=${encodeURIComponent(item.id)}`;
+    const r = await fetch(url, { cache: 'no-store' });
+    if (r.ok) {
+      const data = await r.json();
+      const list = Array.isArray(data?.images) ? data.images : [];
+      if (list.length) return list;
+    }
+  } catch {}
+  // Fallback single image / kosong
+  return item.image ? [item.image] : [];
+}
+
+/** Setup carousel interaksi dan auto-rotate */
+function initCarousel(images){
+  const car = document.getElementById('carousel');
+  const img = document.getElementById('cImg');
+  const dotsWrap = document.getElementById('cDots');
+
+  let idx = 0;
+  let timer = null;
+
+  const renderDots = () => {
+    dotsWrap.innerHTML = images.map((_, i) =>
+      `<div class="dot${i===idx?' active':''}" data-i="${i}"></div>`
+    ).join('');
+    // klik dot
+    dotsWrap.querySelectorAll('.dot').forEach(d =>
+      d.addEventListener('click', () => setSlide(parseInt(d.dataset.i, 10)))
+    );
+  };
+
+  const fitImg = () => {
+    if (!img.naturalWidth || !img.naturalHeight) return;
+    // Selalu pakai contain agar tidak ter-zoom
+    img.style.objectFit = 'contain';
+    img.style.width = 'auto';
+    img.style.height = 'auto';
+  };
+
+  const setSlide = (i) => {
+    if (!images.length) { img.removeAttribute('src'); return; }
+    idx = (i + images.length) % images.length;
+    car.dataset.idx = String(idx);
+    img.src = images[idx];
+    // force re-fit setelah load
+    if (img.complete) fitImg();
+    else img.onload = fitImg;
+    renderDots();
+    restartAuto();
+  };
+
+  const next = () => setSlide(idx + 1);
+  const prev = () => setSlide(idx - 1);
+
+  // Tombol nav
+  car.querySelector('.next')?.addEventListener('click', (e)=>{ e.stopPropagation(); next(); });
+  car.querySelector('.prev')?.addEventListener('click', (e)=>{ e.stopPropagation(); prev(); });
+
+  // Swipe (touch)
+  let tx = 0, dx = 0;
+  car.addEventListener('touchstart', (e)=>{ tx = e.touches[0].clientX; dx = 0; stopAuto(); }, { passive:true });
+  car.addEventListener('touchmove',  (e)=>{ dx = e.touches[0].clientX - tx; }, { passive:true });
+  car.addEventListener('touchend',   ()=>{ if (Math.abs(dx) > 40) (dx<0?next:prev)(); startAuto(); });
+
+  // Keyboard (optional)
+  document.addEventListener('keydown', onKey);
+  function onKey(e){
+    if (document.getElementById('detail')?.hidden) return;
+    if (e.key === 'ArrowRight') next();
+    if (e.key === 'ArrowLeft')  prev();
+  }
+
+  // Auto-rotate
+  function startAuto(){ stopAuto(); timer = setInterval(next, 4500); }
+  function stopAuto(){ if (timer) { clearInterval(timer); timer = null; } }
+  function restartAuto(){ stopAuto(); startAuto(); }
+
+  // Stop saat modal ditutup
+  const cleanup = () => { stopAuto(); document.removeEventListener('keydown', onKey); };
+  document.getElementById('detail')?.addEventListener('hidden', cleanup, { once:true });
+
+  // Mulai
+  setSlide(0);
+  startAuto();
+}
+
+/* ---------- Util lain (cart/format/pay) ---------- */
 
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({
