@@ -5,10 +5,8 @@ tg?.expand();
 let PRICE_PER_GROUP = 25000;
 let LOADED_GROUPS = [];
 
-// ====== Config truncate ======
-const MAX_DESC_CHARS = 120; // ubah sesuai kebutuhan
-
-// Truncate aman emoji + potong di batas kata
+// ====== Truncate aman emoji ======
+const MAX_DESC_CHARS = 120;
 function truncateText(text, max = MAX_DESC_CHARS) {
   if (!text) return "";
   try {
@@ -80,14 +78,12 @@ function renderNeonList(groups) {
     btn.style.marginLeft = 'auto';
     btn.textContent = 'Pilih Grup';
 
-    // 1) Klik tombol: toggle select
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       toggleSelect(card);
     });
 
-    // 2) Klik kartu (kecuali tombol): buka modal detail (dengan carousel)
     card.addEventListener('click', (e) => {
       if (btn.contains(e.target)) return;
       openDetailModal({ id, name, desc: longDesc || desc, image: img });
@@ -119,14 +115,13 @@ function updateButtonState(card, btn){
   if (!btn.style.marginLeft) btn.style.marginLeft = 'auto';
 }
 
-/* ---------- Detail Modal + Carousel ---------- */
+/* ===================== DETAIL MODAL + CAROUSEL ===================== */
 
 async function openDetailModal(item){
   const m = document.getElementById('detail');
   const card = document.querySelector(`.card[data-id="${CSS.escape(item.id)}"]`);
   const selected = card?.classList.contains('selected');
 
-  // Ambil daftar gambar:
   const images = await fetchImagesForItem(item);
 
   m.innerHTML = `
@@ -134,7 +129,7 @@ async function openDetailModal(item){
       <div class="hero">
         <div class="carousel" id="carousel" data-idx="0">
           <button class="nav prev" aria-label="Sebelumnya">‹</button>
-          <img id="cImg" src="" alt="${escapeHtml(item.name)}">
+          <img id="cImg" class="slide" src="" alt="${escapeHtml(item.name)}">
           <button class="nav next" aria-label="Berikutnya">›</button>
           <div class="dots" id="cDots"></div>
         </div>
@@ -149,118 +144,144 @@ async function openDetailModal(item){
   `;
   m.hidden = false;
 
-  // Inisialisasi carousel
-  initCarousel(images);
+  // sizing stabil: heroImgHeight = clamp(220px, 62vh, (98vh - nonImg))
+  const sheet = document.getElementById('sheet');
+  const ttl = document.getElementById('ttl');
+  const dsc = document.getElementById('dsc');
+  const btns = document.getElementById('btns');
+  const hero = sheet.querySelector('.hero');
+  function fitHeroHeight() {
+    const vh = window.innerHeight;
+    const styles = getComputedStyle(sheet);
+    const pad = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
+    const nonImg = ttl.offsetHeight + dsc.offsetHeight + btns.offsetHeight + pad + 24; // gap kecil
+    const avail = Math.max(220, Math.min(vh * 0.98 - nonImg, vh * 0.62));
+    hero.style.maxHeight = `${Math.floor(avail)}px`;
+  }
 
-  // Action buttons
-  m.querySelector('.close')?.addEventListener('click', () => closeDetailModal());
-  m.querySelector('.add')?.addEventListener('click', () => {
-    if (card) toggleSelect(card);
-    closeDetailModal();
-  });
-  m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
+  // Init carousel
+  const cleanup = initCarousel(images);
+
+  // listeners
+  m.querySelector('.close')?.addEventListener('click', () => { cleanup(); closeDetailModal(); });
+  m.querySelector('.add')?.addEventListener('click', () => { if (card) toggleSelect(card); cleanup(); closeDetailModal(); });
+  m.addEventListener('click', (e) => { if (e.target === m) { cleanup(); closeDetailModal(); } }, { once:true });
+
+  // first layout
+  fitHeroHeight();
+  window.addEventListener('resize', fitHeroHeight, { passive:true });
+
+  // remove on close
+  const detach = () => window.removeEventListener('resize', fitHeroHeight);
+  m._detachFit = detach;
 }
 
 function closeDetailModal(){
   const m = document.getElementById('detail');
+  try { m._detachFit?.(); } catch {}
   m.hidden = true;
   m.innerHTML = '';
 }
 
-/** Ambil list gambar untuk modal:
- *  - Jika group punya `image_folder` → GET /api/images?gid=<id> (atau folder)
- *  - Else kalau `image` ada → [image]
- */
 async function fetchImagesForItem(item){
   try {
-    // Prefer /api/images by group id (server akan mapping id -> folder)
-    const url = `/api/images?gid=${encodeURIComponent(item.id)}`;
-    const r = await fetch(url, { cache: 'no-store' });
+    const r = await fetch(`/api/images?gid=${encodeURIComponent(item.id)}`, { cache: 'no-store' });
     if (r.ok) {
       const data = await r.json();
       const list = Array.isArray(data?.images) ? data.images : [];
       if (list.length) return list;
     }
   } catch {}
-  // Fallback single image / kosong
   return item.image ? [item.image] : [];
 }
 
-/** Setup carousel interaksi dan auto-rotate */
 function initCarousel(images){
-  const car = document.getElementById('carousel');
-  const img = document.getElementById('cImg');
-  const dotsWrap = document.getElementById('cDots');
+  const car  = document.getElementById('carousel');
+  const img  = document.getElementById('cImg');
+  const dots = document.getElementById('cDots');
 
   let idx = 0;
   let timer = null;
 
-  const renderDots = () => {
-    dotsWrap.innerHTML = images.map((_, i) =>
+  function renderDots(){
+    dots.innerHTML = images.map((_, i) =>
       `<div class="dot${i===idx?' active':''}" data-i="${i}"></div>`
     ).join('');
-    // klik dot
-    dotsWrap.querySelectorAll('.dot').forEach(d =>
-      d.addEventListener('click', () => setSlide(parseInt(d.dataset.i, 10)))
-    );
-  };
+    dots.querySelectorAll('.dot').forEach(el => {
+      el.addEventListener('click', () => setSlide(parseInt(el.dataset.i,10)));
+    });
+  }
 
-  const fitImg = () => {
-    if (!img.naturalWidth || !img.naturalHeight) return;
-    // Selalu pakai contain agar tidak ter-zoom
+  function fitImg(){
+    // pastikan tidak zoom
     img.style.objectFit = 'contain';
-    img.style.width = 'auto';
+    img.style.width = '100%';
     img.style.height = 'auto';
-  };
+  }
 
-  const setSlide = (i) => {
+  function setSlide(i){
     if (!images.length) { img.removeAttribute('src'); return; }
     idx = (i + images.length) % images.length;
     car.dataset.idx = String(idx);
-    img.src = images[idx];
-    // force re-fit setelah load
-    if (img.complete) fitImg();
-    else img.onload = fitImg;
+    const src = images[idx];
+    if (img.src !== src) {
+      img.onload = () => requestAnimationFrame(fitImg);
+      img.src = src;
+    } else {
+      fitImg();
+    }
     renderDots();
     restartAuto();
-  };
+  }
 
   const next = () => setSlide(idx + 1);
   const prev = () => setSlide(idx - 1);
 
-  // Tombol nav
-  car.querySelector('.next')?.addEventListener('click', (e)=>{ e.stopPropagation(); next(); });
-  car.querySelector('.prev')?.addEventListener('click', (e)=>{ e.stopPropagation(); prev(); });
+  // tombol
+  const onNext = (e)=>{ e.stopPropagation(); next(); };
+  const onPrev = (e)=>{ e.stopPropagation(); prev(); };
+  car.querySelector('.next')?.addEventListener('click', onNext);
+  car.querySelector('.prev')?.addEventListener('click', onPrev);
 
-  // Swipe (touch)
-  let tx = 0, dx = 0;
-  car.addEventListener('touchstart', (e)=>{ tx = e.touches[0].clientX; dx = 0; stopAuto(); }, { passive:true });
-  car.addEventListener('touchmove',  (e)=>{ dx = e.touches[0].clientX - tx; }, { passive:true });
-  car.addEventListener('touchend',   ()=>{ if (Math.abs(dx) > 40) (dx<0?next:prev)(); startAuto(); });
+  // swipe
+  let startX = 0, deltaX = 0;
+  const onTs = (e)=>{ startX = e.touches[0].clientX; deltaX = 0; stopAuto(); };
+  const onTm = (e)=>{ deltaX = e.touches[0].clientX - startX; };
+  const onTe = ()=>{ if (Math.abs(deltaX) > 40) (deltaX < 0 ? next() : prev()); startAuto(); };
+  car.addEventListener('touchstart', onTs, { passive:true });
+  car.addEventListener('touchmove',  onTm, { passive:true });
+  car.addEventListener('touchend',   onTe);
 
-  // Keyboard (optional)
-  document.addEventListener('keydown', onKey);
-  function onKey(e){
+  // keyboard (opsional)
+  const onKey = (e)=>{
     if (document.getElementById('detail')?.hidden) return;
     if (e.key === 'ArrowRight') next();
     if (e.key === 'ArrowLeft')  prev();
-  }
+  };
+  document.addEventListener('keydown', onKey);
 
-  // Auto-rotate
-  function startAuto(){ stopAuto(); timer = setInterval(next, 4500); }
+  // auto-rotate
+  function startAuto(){ stopAuto(); if (images.length > 1) timer = setInterval(next, 4500); }
   function stopAuto(){ if (timer) { clearInterval(timer); timer = null; } }
   function restartAuto(){ stopAuto(); startAuto(); }
 
-  // Stop saat modal ditutup
-  const cleanup = () => { stopAuto(); document.removeEventListener('keydown', onKey); };
-  document.getElementById('detail')?.addEventListener('hidden', cleanup, { once:true });
-
-  // Mulai
+  // mulai
   setSlide(0);
   startAuto();
+
+  // cleanup saat modal ditutup
+  return function cleanup(){
+    stopAuto();
+    document.removeEventListener('keydown', onKey);
+    car.querySelector('.next')?.removeEventListener('click', onNext);
+    car.querySelector('.prev')?.removeEventListener('click', onPrev);
+    car.removeEventListener('touchstart', onTs);
+    car.removeEventListener('touchmove', onTm);
+    car.removeEventListener('touchend', onTe);
+  };
 }
 
-/* ---------- Util lain (cart/format/pay) ---------- */
+/* ===================== UTIL & PAYMENT ===================== */
 
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({
