@@ -82,37 +82,50 @@
 }
 
 /* ===== DETAIL MODAL (image keeps its own aspect) ===== */
+/* Modal base */
 .modal{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
   background:rgba(0,0,0,.65); padding:18px; z-index:8 }
 .modal[hidden]{ display:none !important; pointer-events:none !important; }
 
 .modal > .sheet{
-  width:min(640px,100%); max-height:88vh; overflow:auto; background:#0f0f10;
-  border:1px solid #ffffff14; border-radius:16px; padding:16px; color:#fff
+  width:min(92vw, 880px);                 /* wider on large screens */
+  max-height:88vh;
+  overflow:auto;
+  background:#0f0f10;
+  border:1px solid #ffffff14;
+  border-radius:16px;
+  padding:16px;
+  color:#fff;
+  display:flex;                           /* keep content stacked */
+  flex-direction:column;
 }
 
-/* Container no longer imposes a landscape box */
+/* Container doesn’t force aspect anymore */
 .sheet .hero{
   width:100%;
-  display:flex;                /* center the image */
+  display:flex;
   justify-content:center;
-  background:transparent;      /* no dark box */
-  border:0;                    /* no border on container */
+  background:transparent;
+  border:0;
   padding:0;
+  margin:0;
 }
 
-/* Image draws the frame and keeps natural ratio */
+/* Image draws its own frame */
 .sheet .hero img{
   display:block;
   max-width:100%;
-  max-height:65vh;             /* prevent overflow on tall images */
   width:auto;
   height:auto;
   object-fit:contain;
   border-radius:12px;
-  border:1px solid #ffffff14;  /* frame on the image itself */
-  background:#0f0f10;          /* subtle backdrop just behind the photo */
+  border:1px solid #ffffff14;
+  background:#0f0f10;
 }
+
+/* Dynamic sizing */
+.sheet.landscape .hero img{ max-height:62vh; }  /* videos/photos wide */
+.sheet.portrait  .hero img{ max-height:84vh; }  /* make portrait much larger */
 
 .sheet .title{ font-size:22px; font-weight:900; margin:12px 0 6px }
 .sheet .desc{ color:#cdd0d4; font-size:14px; line-height:1.45; white-space:pre-wrap }

@@ -135,7 +135,7 @@ function openDetailModal(item){
   m.innerHTML = `
     <div class="sheet">
       <div class="hero">
-        ${item.image ? `<img src="${item.image}" alt="${escapeHtml(item.name)}" loading="lazy">` : ''}
+        ${item.image ? `<img src="${item.image}" alt="${escapeHtml(item.name)}">` : ''}
       </div>
       <div class="title">${escapeHtml(item.name)}</div>
       <div class="desc">${escapeHtml(item.desc || '')}</div>
@@ -147,6 +147,23 @@ function openDetailModal(item){
   `;
   m.hidden = false;
 
+  // --- NEW: set sheet class based on image aspect ---
+  const sheet = m.querySelector('.sheet');
+  const imgEl = m.querySelector('.hero img');
+  const applyAspectClass = () => {
+    if (!imgEl || !sheet) return;
+    const w = imgEl.naturalWidth || imgEl.width || 1;
+    const h = imgEl.naturalHeight || imgEl.height || 1;
+    const isPortrait = h >= w;
+    sheet.classList.toggle('portrait', isPortrait);
+    sheet.classList.toggle('landscape', !isPortrait);
+  };
+  if (imgEl) {
+    if (imgEl.complete) applyAspectClass();
+    else imgEl.addEventListener('load', applyAspectClass, { once:true });
+  }
+  // ---------------------------------------------------
+
   m.querySelector('.close')?.addEventListener('click', () => closeDetailModal());
   m.querySelector('.add')?.addEventListener('click', () => {
     if (card) toggleSelect(card);
@@ -154,6 +171,7 @@ function openDetailModal(item){
   });
   m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
 }
+
 
 function closeDetailModal(){
   const m = document.getElementById('detail');
