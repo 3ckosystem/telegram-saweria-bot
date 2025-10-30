@@ -1,12 +1,13 @@
+<script>
 // app/webapp/app.js
-const tg = window.Telegram?.WebApp;
+const tg = window.Telegram?.WebApp; 
 tg?.expand();
 
 let PRICE_PER_GROUP = 25000;
 let LOADED_GROUPS = [];
 
 // ====== Config truncate ======
-const MAX_DESC_CHARS = 120; // ubah sesuai kebutuhan
+const MAX_DESC_CHARS = 120;
 
 // Truncate aman emoji + potong di batas kata
 function truncateText(text, max = MAX_DESC_CHARS) {
@@ -20,7 +21,6 @@ function truncateText(text, max = MAX_DESC_CHARS) {
     const safe = lastSpace > 40 ? partial.slice(0, lastSpace) : partial;
     return safe.replace(/[.,;:!\s]*$/,'') + '…';
   } catch {
-    // Fallback sederhana
     if (text.length <= max) return text;
     let t = text.slice(0, max);
     const lastSpace = t.lastIndexOf(' ');
@@ -51,10 +51,13 @@ function renderNeonList(groups) {
     const desc = String(g.desc ?? '').trim();
     const longDesc = String(g.long_desc ?? desc).trim();
     const img  = String(g.image ?? '').trim();
+    const folder = String(g.image_folder ?? g.ik_folder ?? '').trim();
 
     const card = document.createElement('article');
     card.className = 'card';
     card.dataset.id = id;
+    // simpan folder untuk modal
+    if (folder) card.dataset.folder = folder;
 
     const check = document.createElement('div');
     check.className = 'check';
@@ -64,23 +67,20 @@ function renderNeonList(groups) {
     thumb.className = 'thumb';
     if (img) thumb.style.backgroundImage = `url("${img}")`;
 
-    const meta = document.createElement('div');
+    const meta = document.createElement('div'); 
     meta.className = 'meta';
 
-    const title = document.createElement('div');
-    title.className = 'title';
+    const title = document.createElement('div'); 
+    title.className = 'title'; 
     title.textContent = name;
 
-    const p = document.createElement('div');
-    p.className = 'desc';
-    // truncate untuk tampilan kartu
+    const p = document.createElement('div'); 
+    p.className = 'desc'; 
     p.textContent = truncateText(desc || 'Akses eksklusif grup pilihan.');
 
     const btn = document.createElement('button');
     btn.type = 'button';
-    // default: berwarna & rata kanan
-    btn.className = 'btn-solid';
-    btn.style.marginLeft = 'auto';
+    btn.className = 'btn-outline btn-primary-right';
     btn.textContent = 'Pilih Grup';
 
     // === BEHAVIOR ===
@@ -92,16 +92,16 @@ function renderNeonList(groups) {
     });
 
     // 2) Klik area kartu selain tombol: buka modal dengan deskripsi FULL
-    card.addEventListener('click', (e) => {
-      if (btn.contains(e.target)) return; // safety
-      openDetailModal({ id, name, desc: longDesc || desc, image: img });
+    card.addEventListener('click', async (e) => {
+      if (btn.contains(e.target)) return;
+      const item = { id, name, desc: longDesc || desc, image: img, folder };
+      openDetailModal(item);
     });
 
     meta.append(title, p, btn);
     card.append(check, thumb, meta);
     root.appendChild(card);
 
-    // set label + warna awal sesuai state
     updateButtonState(card, btn);
   });
 
@@ -110,36 +110,109 @@ function renderNeonList(groups) {
 
 function toggleSelect(card){
   card.classList.toggle('selected');
-  const btn = card.querySelector('button');
+  const btn = card.querySelector('.btn-outline');
   if (btn) updateButtonState(card, btn);
-  syncTotalText();
+  syncTotalText(); 
   updateBadge();
 }
 
 function updateButtonState(card, btn){
   const selected = card.classList.contains('selected');
-  // ganti teks
   btn.textContent = selected ? 'Batal' : 'Pilih Grup';
-  // ganti gaya: berwarna saat BELUM dipilih, ghost saat SUDAH dipilih
-  btn.classList.toggle('btn-solid', !selected);
-  btn.classList.toggle('btn-ghost', selected);
-  // tetap rata kanan
-  if (!btn.style.marginLeft) btn.style.marginLeft = 'auto';
+  btn.classList.toggle('btn-muted', selected); // styled via CSS
+  btn.classList.toggle('btn-colored', !selected);
 }
 
-function openDetailModal(item){
+// --------- CAROUSEL UTIL ---------
+async function fetchFolderImages(folder, limit = 15){
+  if (!folder) return [];
+  try{
+    const u = `/api/images/list?folder=${encodeURIComponent(folder)}&limit=${limit}&t=${Date.now()}`;
+    const r = await fetch(u, { cache: 'no-store' });
+    if (!r.ok) return [];
+    const j = await r.json();
+    // expect {items:[{url:...}, ...]} or [url,...]
+    if (Array.isArray(j)) return j;
+    if (Array.isArray(j.items)) return j.items.map(x => x.url || x);
+    return [];
+  }catch{ return []; }
+}
+
+function buildCarouselHtml(){
+  return `
+    <div class="hero">
+      <div class="carousel">
+        <button class="nav prev" aria-label="Sebelumnya">‹</button>
+        <img class="slide" alt="">
+        <button class="nav next" aria-label="Berikutnya">›</button>
+        <div class="dots"></div>
+      </div>
+    </div>
+  `;
+}
+
+function initCarousel(root, urls, autoMs = 3500){
+  const imgEl = root.querySelector('.carousel .slide');
+  const dotsEl = root.querySelector('.carousel .dots');
+  const prevBtn = root.querySelector('.carousel .prev');
+  const nextBtn = root.querySelector('.carousel .next');
+
+  let idx = 0;
+  let timer = null;
+  let urlsClean = (urls || []).filter(Boolean);
+  if (urlsClean.length === 0) {
+    urlsClean = [imgEl.getAttribute('src')].filter(Boolean);
+  }
+
+  // build dots
+  dotsEl.innerHTML = urlsClean.map((_, i) => `<button class="dot" data-i="${i}" aria-label="Go to slide ${i+1}"></button>`).join('');
+  const dotBtns = [...dotsEl.querySelectorAll('.dot')];
+
+  function show(i){
+    idx = (i + urlsClean.length) % urlsClean.length;
+    imgEl.src = urlsClean[idx];
+    dotBtns.forEach((d, di) => d.classList.toggle('active', di === idx));
+  }
+
+  function next(){ show(idx + 1); }
+  function prev(){ show(idx - 1); }
+
+  nextBtn.addEventListener('click', next);
+  prevBtn.addEventListener('click', prev);
+  dotBtns.forEach(d => d.addEventListener('click', () => show(parseInt(d.dataset.i,10)||0)));
+
+  // swipe
+  let sx = 0, sy = 0, dx = 0, dy = 0;
+  imgEl.addEventListener('touchstart', (e)=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; dx=0; dy=0;}, {passive:true});
+  imgEl.addEventListener('touchmove',  (e)=>{ const t=e.touches[0]; dx=t.clientX-sx; dy=t.clientY-sy; }, {passive:true});
+  imgEl.addEventListener('touchend',   ()=>{ if (Math.abs(dx)>40 && Math.abs(dx)>Math.abs(dy)) (dx<0?next:prev)(); });
+
+  // hover pause (desktop)
+  const car = root.querySelector('.carousel');
+  const start = ()=>{ if (autoMs>0 && urlsClean.length>1){ stop(); timer=setInterval(next, autoMs); } };
+  const stop  = ()=>{ if (timer){ clearInterval(timer); timer=null; } };
+  car.addEventListener('mouseenter', stop);
+  car.addEventListener('mouseleave', start);
+
+  show(0);
+  start();
+  // return controller if needed
+  return { show, next, prev, stop, start };
+}
+
+// --------- MODAL ----------
+async function openDetailModal(item){
   const m = document.getElementById('detail');
   const card = document.querySelector(`.card[data-id="${CSS.escape(item.id)}"]`);
   const selected = card?.classList.contains('selected');
 
+  // build basic sheet (carousel will be injected)
   m.innerHTML = `
-    <div class="sheet" id="sheet">
-      <div class="hero" id="hero">
-        ${item.image ? `<img id="detail-img" src="${item.image}" alt="${escapeHtml(item.name)}">` : ''}
-      </div>
-      <div class="title" id="ttl">${escapeHtml(item.name)}</div>
-      <div class="desc" id="dsc">${escapeHtml(item.desc || '')}</div>
-      <div class="row" id="btns">
+    <div class="sheet sheet-fluid">
+      ${buildCarouselHtml()}
+      <div class="title">${escapeHtml(item.name)}</div>
+      <div class="desc">${escapeHtml(item.desc || '')}</div>
+      <div class="row">
         <button class="close">Tutup</button>
         <button class="add">${selected ? 'Batal' : 'Pilih Grup'}</button>
       </div>
@@ -147,93 +220,72 @@ function openDetailModal(item){
   `;
   m.hidden = false;
 
-  const sheet = document.getElementById('sheet');
-  const hero  = document.getElementById('hero');
-  const img   = document.getElementById('detail-img');
-  const ttl   = document.getElementById('ttl');
-  const dsc   = document.getElementById('dsc');
-  const btns  = document.getElementById('btns');
+  // Fetch all images from folder (fallback to single image)
+  let urls = [];
+  if (item.folder) {
+    urls = await fetchFolderImages(item.folder, 20);
+  }
+  if ((!urls || urls.length === 0) && item.image) {
+    urls = [item.image];
+  }
 
-  // Hitung tinggi hero agar: hero + teks + tombol ≈ 98vh (hampir fullscreen)
-  const fitHero = () => {
-    const vh = window.innerHeight;
-    // tinggi non-gambar (judul + deskripsi + tombol + padding sheet + gap)
-    const styles = getComputedStyle(sheet);
-    const pad = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
-    const gaps = 12 * 2; // gap kira2
-    const nonImg = ttl.offsetHeight + dsc.offsetHeight + btns.offsetHeight + pad + gaps;
-
-    // sisa aman untuk area gambar
-    const target = Math.max(200, Math.min(vh * 0.98 - nonImg, vh * 0.92));
-    hero.style.maxHeight = `${Math.floor(target)}px`;
-
-    // Jika masih banyak “pillarbox” (portrait sempit), boleh pakai cover agar lebar penuh
-    if (img && img.naturalWidth && img.naturalHeight) {
-      const portrait = img.naturalHeight > img.naturalWidth * 1.15;
-      img.style.objectFit = portrait ? 'cover' : 'contain';
-      // Saat cover, pastikan tinggi persis memenuhi hero
-      if (portrait) {
-        img.style.height = '100%';
-        hero.style.height = `${Math.floor(target)}px`;
-      } else {
-        img.style.height = 'auto';
-        hero.style.height = 'auto';
-      }
-    }
-  };
-
-  if (img) {
-    if (img.complete) fitHero();
-    else img.addEventListener('load', fitHero, { once:true });
-    window.addEventListener('resize', fitHero, { passive:true });
+  // If still empty, hide carousel area
+  if (!urls || urls.length === 0) {
+    const hero = m.querySelector('.hero');
+    if (hero) hero.remove();
+  } else {
+    // preload first quickly
+    const first = urls[0];
+    const slide = m.querySelector('.carousel .slide');
+    if (slide) slide.src = first;
+    // init carousel
+    initCarousel(m, urls, 3500);
   }
 
   m.querySelector('.close')?.addEventListener('click', () => closeDetailModal());
-  m.querySelector('.add')?.addEventListener('click', () => { if (card) toggleSelect(card); closeDetailModal(); });
+  m.querySelector('.add')?.addEventListener('click', () => {
+    if (card) toggleSelect(card);
+    closeDetailModal();
+  });
   m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
 }
 
-
-
-
-function closeDetailModal(){
-  const m = document.getElementById('detail');
-  m.hidden = true;
-  m.innerHTML = '';
+function closeDetailModal(){ 
+  const m = document.getElementById('detail'); 
+  m.hidden = true; 
+  m.innerHTML=''; 
 }
 
-function escapeHtml(s){
+function escapeHtml(s){ 
   return String(s).replace(/[&<>"']/g, c => ({
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-  })[c]);
+  })[c]); 
 }
 
-function getSelectedIds(){
-  return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id);
+function getSelectedIds(){ 
+  return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id); 
 }
 
-function updateBadge(){
-  const n = getSelectedIds().length;
-  const b = document.getElementById('cartBadge');
-  if (n > 0) { b.hidden = false; b.textContent = String(n); }
-  else b.hidden = true;
+function updateBadge(){ 
+  const n = getSelectedIds().length, b = document.getElementById('cartBadge'); 
+  if(n>0){ b.hidden=false; b.textContent=String(n); } else b.hidden=true; 
 }
 
-function formatRupiah(n){
-  if (!Number.isFinite(n)) return "Rp 0";
-  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+function formatRupiah(n){ 
+  if(!Number.isFinite(n)) return "Rp 0"; 
+  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); 
 }
 
-function syncTotalText(){
-  const t = getSelectedIds().length * PRICE_PER_GROUP;
-  document.getElementById('total-text').textContent = formatRupiah(t);
-  document.getElementById('pay')?.toggleAttribute('disabled', t <= 0);
+function syncTotalText(){ 
+  const t = getSelectedIds().length * PRICE_PER_GROUP; 
+  document.getElementById('total-text').textContent = formatRupiah(t); 
+  document.getElementById('pay')?.toggleAttribute('disabled', t<=0); 
 }
 
 function getUserId(){
-  const u1 = tg?.initDataUnsafe?.user?.id;
+  const u1 = tg?.initDataUnsafe?.user?.id; 
   if (u1) return u1;
-  const qp = new URLSearchParams(window.location.search);
+  const qp = new URLSearchParams(window.location.search); 
   const u2 = qp.get("uid");
   return u2 ? parseInt(u2, 10) : null;
 }
@@ -270,21 +322,21 @@ async function onPay(){
   const statusUrl = `${window.location.origin}/api/invoice/${inv.invoice_id}/status`;
   let t = setInterval(async ()=>{
     try{
-      const r = await fetch(statusUrl);
-      if(!r.ok) return;
+      const r = await fetch(statusUrl); if(!r.ok) return;
       const s = await r.json();
       if (s.status === "PAID"){ clearInterval(t); hideQRModal(); tg?.close?.(); }
     }catch{}
   }, 2000);
 }
 
-function showQRModal(html){
-  const m = document.getElementById('qr');
-  m.innerHTML = `<div>${html}</div>`;
-  m.hidden = false;
+function showQRModal(html){ 
+  const m=document.getElementById('qr'); 
+  m.innerHTML=`<div>${html}</div>`; 
+  m.hidden=false; 
 }
-function hideQRModal(){
-  const m = document.getElementById('qr');
-  m.hidden = true;
-  m.innerHTML = '';
+function hideQRModal(){ 
+  const m=document.getElementById('qr'); 
+  m.hidden=true; 
+  m.innerHTML=''; 
 }
+</script>
