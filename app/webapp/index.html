@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>EnSEXlopedia VIP Catalog</title>
+
+  <!-- Critical CSS mini biar gak "telanjang" -->
+  <style>
+    :root{--bg:#0b0b0b;--text:#fff;--muted:#b7b7b7;--accent:#ff2345;--stroke:#ff234566}
+    *{box-sizing:border-box} html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--text);
+      font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial}
+    .header{position:sticky;top:0;z-index:5;padding:14px 16px 8px;
+      background:linear-gradient(180deg,rgba(0,0,0,.9),rgba(0,0,0,.45),transparent)}
+    .brand{font-weight:900;font-size:22px}
+    .badge{margin-left:8px;min-width:22px;height:22px;border-radius:999px;
+      display:inline-grid;place-items:center;font-size:12px;background:var(--accent)}
+    .list{padding:10px 14px 120px}
+    .paybar{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;gap:14px;
+      align-items:center;padding:14px 16px 18px;background:linear-gradient(0deg,rgba(0,0,0,.85),rgba(0,0,0,.55));
+      border-top:1px solid #ffffff14;backdrop-filter:blur(8px)}
+    .total{flex:1;display:flex;flex-direction:column}
+    .total small{color:var(--muted)}
+    .cta{appearance:none;border:0;min-width:230px;height:48px;border-radius:22px;
+      padding:0 18px;font-weight:800;color:#fff;background:var(--accent)}
+    .cta:disabled{filter:grayscale(1) opacity(.6)}
+  </style>
+
+  <link rel="stylesheet" href="/webapp/styles.css?v=neon4"/>
+</head>
+<body>
+  <header class="header">
+    <div class="brand">VIP Catalog</div>
+  </header>
+
+  <main id="list" class="list"></main>
+
+  <footer class="paybar">
+    <div class="total">
+      <small>Total <span id="cartBadge" class="badge" hidden>0</span> Group</small>
+      <strong id="total-text" style="font-size:24px">Rp 0</strong>
+    </div>
+    <button id="pay" class="cta" disabled>Lanjutkan Pembayaran</button>
+  </footer>
+
+  <div id="qr" class="qr-modal" hidden></div>
+  <!-- modal detail -->
+  <div id="detail" class="modal" hidden></div>
+  <script src="/webapp/app.js?v=neon4"></script>
+  <script>
+(async () => {
+  // cari uid dari query (?uid=...) atau dari initDataUnsafe
+  const url = new URL(location.href);
+  let uid = url.searchParams.get('uid');
+  try {
+    if (!uid && window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe) {
+      uid = Telegram.WebApp.initDataUnsafe.user?.id;
+    }
+  } catch (e) {}
+
+  if (!uid) {
+    document.body.innerHTML = "<div style='padding:16px;font-family:sans-serif'>Tidak ada UID Telegram. Buka via bot.</div>";
+    return;
+  }
+
+  // Cek gate ke server
+  let data;
+  try {
+    const res = await fetch(`/api/gate/status?uid=${encodeURIComponent(uid)}`);
+    if (res.status === 403) {
+      const payload = await res.json(); // {detail:{...}}
+      showGateBlock(payload.detail);
+      return;
+    }
+    data = await res.json(); // {passed:true,...}
+  } catch (e) {
+    document.body.innerHTML = "<div style='padding:16px'>Gagal memeriksa status. Coba ulang.</div>";
+    return;
+  }
+
+  if (!data?.passed) {
+    showGateBlock(data);
+    return;
+  }
+
+  // >>>> Lanjutkan render normal Mini App kamu di sini <<<<
+
+})();
+
+function showGateBlock(info) {
+  const g = (info?.group_invites || []).filter(Boolean);
+  const c = (info?.channel_invites || []).filter(Boolean);
+  const root = document.getElementById('app') || document.body;
+  root.innerHTML = `
+    <div style="max-width:520px;margin:24px auto;padding:16px;font-family:sans-serif;text-align:center">
+      <h3>Wajib Join/Subscribe Dulu</h3>
+      <p>Status: ${(info?.ok_count||0)}/${(info?.total_required||0)} terdeteksi join.</p>
+      ${g.map(u => `<p><a href="${u}" target="_blank" rel="noopener">Join Group</a></p>`).join("")}
+      ${c.map(u => `<p><a href="${u}" target="_blank" rel="noopener">Subscribe Channel</a></p>`).join("")}
+      <p style="margin-top:16px">Setelah join, kembali ke bot dan tekan <b>Re-check</b>.</p>
+    </div>
+  `;
+}
+</script>
+
+</body>
+</html>
