@@ -81,35 +81,38 @@
   touch-action: manipulation;
 }
 
-/* === DETAIL MODAL (preview item) === */
+/* ===== DETAIL MODAL (perbaiki agar foto ikut rasio asli) ===== */
 .modal{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
   background:rgba(0,0,0,.65); padding:18px; z-index:8 }
 .modal[hidden]{ display:none !important; pointer-events:none !important; }
 
-.modal > .sheet{ width:min(640px,100%); max-height:88vh; overflow:auto; background:#0f0f10;
-  border:1px solid #ffffff14; border-radius:16px; padding:16px; color:#fff }
+.modal > .sheet{
+  width:min(640px,100%); max-height:88vh; overflow:auto; background:#0f0f10;
+  border:1px solid #ffffff14; border-radius:16px; padding:16px; color:#fff
+}
 
-/* HERO mengikuti rasio asli gambar (portrait/landscape) */
-/* HERO mengikuti rasio asli gambar (portrait/landscape) */
+/* ⛔️ HAPUS aspect-ratio & background-image di hero */
 .sheet .hero{
   width:100%;
-  max-height:70vh;              /* batas aman tinggi layar */
-  margin:0 0 12px;
+  /* aspect-ratio:16/9;  <-- HAPUS baris ini */
   border-radius:12px;
-  background:#1c0f12;
   border:1px solid #ffffff14;
-  display:flex; align-items:center; justify-content:center;
+  background:#0f0f10;
   overflow:hidden;
-}
-.sheet .hero img{
-  max-width:100%;
-  max-height:70vh;
-  width:auto;
-  height:auto;
-  object-fit:contain;           /* jaga rasio asli */
-  display:block;
+  display:grid;                /* agar gambar bisa center */
+  place-items:center;
+  padding:0;                   /* tidak butuh padding pengatur rasio */
 }
 
+/* Gambar mengikuti rasio asli (portrait/landscape) */
+.sheet .hero img{
+  display:block;
+  max-width:100%;
+  max-height:65vh;             /* jangan lebih tinggi dari viewport */
+  width:auto;
+  height:auto;
+  object-fit:contain;          /* tidak crop, pertahankan rasio */
+}
 
 .sheet .title{ font-size:22px; font-weight:900; margin:12px 0 6px }
 .sheet .desc{ color:#cdd0d4; font-size:14px; line-height:1.45; white-space:pre-wrap }
