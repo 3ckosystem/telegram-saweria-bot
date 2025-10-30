@@ -6,9 +6,8 @@ let PRICE_PER_GROUP = 25000;
 let LOADED_GROUPS = [];
 
 // ====== Config truncate ======
-const MAX_DESC_CHARS = 120; // ubah sesuai kebutuhan
+const MAX_DESC_CHARS = 120;
 
-// Truncate aman emoji + potong di batas kata
 function truncateText(text, max = MAX_DESC_CHARS) {
   if (!text) return "";
   try {
@@ -30,11 +29,9 @@ function truncateText(text, max = MAX_DESC_CHARS) {
 
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    // Cache-buster agar /api/config tidak tersangkut cache
     const r = await fetch('/api/config?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const cfg = await r.json();
-    console.log('[config]', cfg);
     PRICE_PER_GROUP = parseInt(cfg?.price_idr ?? '25000', 10) || 25000;
     LOADED_GROUPS = Array.isArray(cfg?.groups) ? cfg.groups : [];
   } catch (e) {
@@ -56,7 +53,7 @@ function renderFallbackEmpty() {
   root.innerHTML = `
     <div style="padding:16px;color:#cdd0d4">
       Tidak ada data grup untuk ditampilkan.<br/>
-      Cek kembali <code>GROUP_IDS_JSON</code> di server atau coba reload.
+      Cek <code>GROUP_IDS_JSON</code> di server atau reload.
     </div>
   `;
 }
@@ -71,7 +68,7 @@ function renderNeonList(groups) {
     const desc = String(g.desc ?? '').trim();
     const longDesc = String(g.long_desc ?? desc).trim();
     const img  = String(g.image ?? '').trim();
-    const imageFolder = String(g.image_folder ?? '').trim(); // <-- untuk carousel
+    const imageFolder = String(g.image_folder ?? '').trim();
 
     const card = document.createElement('article');
     card.className = 'card';
@@ -99,19 +96,17 @@ function renderNeonList(groups) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn-solid';
-    btn.style.marginLeft = 'auto'; // rata kanan
+    btn.style.marginLeft = 'auto';
     btn.textContent = 'Pilih Grup';
 
-    // 1) Klik tombol: toggle select (HANYA tombol)
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       toggleSelect(card);
     });
 
-    // 2) Klik area kartu selain tombol: buka modal (pakai carousel)
     card.addEventListener('click', (e) => {
-      if (btn.contains(e.target)) return; // safety
+      if (btn.contains(e.target)) return;
       openDetailModal({
         id, name,
         desc: longDesc || desc,
@@ -150,14 +145,13 @@ function updateButtonState(card, btn){
    DETAIL MODAL + CAROUSEL
    ======================= */
 let _carouselTimer = null;
-const ROTATE_MS = 4000;  // auto-rotate interval
+const ROTATE_MS = 4000;
 
 async function openDetailModal(item){
   const m = document.getElementById('detail');
   const card = document.querySelector(`.card[data-id="${CSS.escape(item.id)}"]`);
   const selected = card?.classList.contains('selected');
 
-  // kerangka modal + carousel controls
   m.innerHTML = `
     <div class="sheet" id="sheet">
       <div class="hero" id="hero">
@@ -188,39 +182,32 @@ async function openDetailModal(item){
   const dsc   = document.getElementById('dsc');
   const btns  = document.getElementById('btns');
 
-  // --- Ambil daftar gambar untuk carousel ---
   let images = await loadImagesForItem(item);
   if (!images.length && item.image) images = [item.image];
-  if (!images.length) images = []; // benar2 kosong
 
-  // state carousel
   let idx = 0;
 
   const renderDots = () => {
+    if (images.length <= 1) { cDots.innerHTML = ''; return; }
     cDots.innerHTML = images.map((_, i) =>
       `<span class="dot ${i===idx?'active':''}" data-i="${i}"></span>`).join('');
     cDots.querySelectorAll('.dot').forEach(el => {
-      el.addEventListener('click', () => { idx = parseInt(el.dataset.i,10)||0; renderSlide(true); });
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        idx = parseInt(el.dataset.i,10)||0;
+        renderSlide(true);
+      });
     });
   };
 
   const renderSlide = (userAction = false) => {
-    if (!images.length) {
-      cImg.removeAttribute('src');
-      hero.style.display = 'none';
-      return;
-    }
-    hero.style.display = '';
+    if (!images.length) { hero.style.display='none'; return; }
+    hero.style.display='';
     cImg.src = images[idx];
-
-    // reset auto-rotate jika user interaksi
-    if (userAction) restartAutoRotate();
-
-    // update dots
     renderDots();
+    if (userAction) restartAutoRotate();
   };
 
-  // Auto-rotate
   const restartAutoRotate = () => {
     if (_carouselTimer) clearInterval(_carouselTimer);
     if (images.length > 1) {
@@ -231,53 +218,57 @@ async function openDetailModal(item){
     }
   };
 
-  // tombol prev/next
-  cPrev.addEventListener('click', () => {
+  cPrev.addEventListener('click', (e) => {
+    e.stopPropagation();
     if (!images.length) return;
     idx = (idx - 1 + images.length) % images.length;
     renderSlide(true);
   });
-  cNext.addEventListener('click', () => {
+  cNext.addEventListener('click', (e) => {
+    e.stopPropagation();
     if (!images.length) return;
     idx = (idx + 1) % images.length;
     renderSlide(true);
   });
 
-  // swipe gesture
-  addSwipe(document.getElementById('carousel'), () => cPrev.click(), () => cNext.click());
+  addSwipe(document.getElementById('carousel'),
+    () => cPrev.click(),
+    () => cNext.click()
+  );
 
-  // sizing hero agar hampir full-screen rapi
+  // === Fit image tanpa zoom (rasio asli) ===
   const fitHero = () => {
     const vh = window.innerHeight;
     const styles = getComputedStyle(sheet);
     const pad = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
     const gaps = 12 * 2;
     const nonImg = ttl.offsetHeight + dsc.offsetHeight + btns.offsetHeight + pad + gaps;
-    const target = Math.max(220, Math.min(vh * 0.98 - nonImg, vh * 0.92));
-    hero.style.maxHeight = `${Math.floor(target)}px`;
+    const target = Math.max(220, Math.min(vh * 0.98 - nonImg, vh * 0.92)); // ketinggian maksimum gambar
 
-    // paksa fit ke kontainer, tetap jaga rasio
-    cImg.style.objectFit = 'contain';
-    cImg.style.height = '100%';
-    hero.style.height = `${Math.floor(target)}px`;
+    hero.style.maxHeight = `${Math.floor(target)}px`;
+    hero.style.height = 'auto';
+
+    // KUNCI: jangan pakai height:100% atau object-fit
+    // biar tidak ter-zoom, cukup batasi max-height & max-width
+    cImg.style.maxHeight = `${Math.floor(target)}px`;
+    cImg.style.maxWidth = '100%';
+    cImg.style.width = 'auto';
+    cImg.style.height = 'auto';
   };
 
   cImg.addEventListener('load', fitHero);
   window.addEventListener('resize', fitHero, { passive:true });
 
-  // render awal
   renderSlide(false);
   restartAutoRotate();
   fitHero();
 
-  // tombol modal
   m.querySelector('.close')?.addEventListener('click', () => closeDetailModal());
   m.querySelector('.add')?.addEventListener('click', () => { if (card) toggleSelect(card); closeDetailModal(); });
   m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
 }
 
 async function loadImagesForItem(item){
-  // Coba ambil daftar gambar via backend: /api/images?folder=<encoded>
   const folder = (item.image_folder || "").trim();
   if (!folder) return item.image ? [item.image] : [];
   try {
@@ -285,11 +276,9 @@ async function loadImagesForItem(item){
     const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
-    // dukung bentuk {items:[...]} atau {images:[...]}
     const arr = Array.isArray(data?.items) ? data.items
               : Array.isArray(data?.images) ? data.images
               : [];
-    // filter URL valid saja
     return arr.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, 12);
   } catch (e) {
     console.warn('[carousel] fallback single image. Error:', e);
@@ -299,7 +288,7 @@ async function loadImagesForItem(item){
 
 function addSwipe(el, onLeft, onRight){
   let x0 = null, y0 = null, t0 = 0;
-  const TH = 30; // min jarak
+  const TH = 30;
   el.addEventListener('touchstart', (e) => {
     const t = e.touches[0];
     x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
@@ -309,7 +298,6 @@ function addSwipe(el, onLeft, onRight){
     const dx = (e.changedTouches[0].clientX - x0);
     const dy = (e.changedTouches[0].clientY - y0);
     const dt = Date.now() - t0;
-    // dominan horizontal
     if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > TH && dt < 600) {
       if (dx < 0) onRight?.(); else onLeft?.();
     }

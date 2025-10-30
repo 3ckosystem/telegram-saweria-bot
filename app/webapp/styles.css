@@ -36,23 +36,19 @@
 
 /* Tombol di kartu: rata kanan, berwarna saat belum dipilih, outline saat terpilih */
 .btn-outline{
-  align-self:flex-end;            /* RATA KANAN */
+  align-self:flex-end;
   height:40px; padding:0 16px; border-radius:16px;
   display:inline-grid; place-items:center; font-size:14px;
-  background:var(--accent);       /* WARNA AKTIF (default) */
-  color:#fff;
-  border:1.8px solid var(--accent);
+  background:var(--accent); color:#fff; border:1.8px solid var(--accent);
   transition:all .22s ease;
 }
-/* kompatibel dengan logika JS baru (toggle .btn-colored / .btn-muted) */
+/* kelas util kompatibel */
 .btn-primary-right{ align-self:flex-end; margin-left:auto; }
 .btn-colored{ background:var(--accent); color:#fff; border-color:var(--accent); }
 .btn-muted{ background:transparent; color:#ffa0b0; border-color:var(--stroke); }
 
 .card.selected .btn-outline{
-  background:transparent;         /* TIDAK BERWARNA SAAT TERPILIH */
-  color:var(--accent);
-  border-color:var(--accent);
+  background:transparent; color:var(--accent); border-color:var(--accent);
 }
 
 .card.selected{ outline:2px solid var(--accent); box-shadow:0 0 22px rgba(255,35,69,.25) }
@@ -80,22 +76,18 @@
 .qr-modal[hidden]{ display:none !important; pointer-events:none !important; }
 
 /* Feel lebih klik di mobile */
-.btn-outline, .cta {
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
+.btn-outline, .cta { cursor:pointer; -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
 
 /* ===== DETAIL MODAL (carousel + gambar jaga rasio) ===== */
 .modal{
   position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
-  background:rgba(0,0,0,.65); padding:18px; z-index:8
+  background:rgba(0,0,0,.65); padding:18px; z-index:8;
 }
-.modal[hidden]{ display:none!important; pointer-events:none!important }
+.modal[hidden]{ display:none!important; pointer-events:none!important; }
 
 .modal>.sheet{
-  width:min(94vw, 920px);         /* dinamis, hampir full */
-  max-height:96vh;                /* hampir full screen */
+  width:min(94vw, 920px);        /* dinamis, hampir full */
+  max-height:96vh;               /* hampir full screen */
   overflow:auto;
   background:#0f0f10; border:1px solid #ffffff14; border-radius:16px;
   padding:16px; color:#fff; display:flex; flex-direction:column; gap:12px;
@@ -106,14 +98,14 @@
 
 /* === Carousel === */
 .carousel{ position:relative; width:100%; }
-.carousel .slide{
+.carousel img{
   display:block;
   max-width:100%;
-  max-height:62vh;               /* besar tetapi tetap menyisakan ruang judul/deskripsi */
+  max-height:62vh;              /* besar namun masih sisakan ruang judul/deskripsi */
   width:auto; height:auto;
   margin:0 auto;
   border-radius:12px;
-  object-fit:contain;            /* JAGA RASIO, tanpa crop */
+  object-fit:contain;           /* JAGA RASIO TANPA CROP/ZOOM */
   background:#0c0c0d;
 }
 
@@ -123,16 +115,19 @@
   width:40px; height:40px; border-radius:50%;
   background:rgba(0,0,0,.55); color:#fff; border:1px solid #ffffff33;
   display:grid; place-items:center; font-size:22px; cursor:pointer;
+  z-index:3; pointer-events:auto;
 }
 .carousel .prev{ left:10px; }
 .carousel .next{ right:10px; }
 
 /* indikator dot */
 .carousel .dots{
-  position:absolute; left:0; right:0; bottom:8px; display:flex; gap:6px; justify-content:center;
+  position:absolute; left:0; right:0; bottom:8px;
+  display:flex; gap:6px; justify-content:center; z-index:2; pointer-events:auto;
 }
 .carousel .dot{
-  width:7px; height:7px; border-radius:50%; border:1px solid #ffffff77; background:transparent;
+  width:7px; height:7px; border-radius:50%;
+  border:1px solid #ffffff77; background:transparent;
 }
 .carousel .dot.active{ background:#fff; }
 
