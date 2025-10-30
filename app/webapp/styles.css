@@ -86,3 +86,9 @@
 /* tombol di kartu tetap klik-able */
 .btn-outline, .cta { cursor:pointer; -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
 
+.card-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;         /* atur jumlah baris visual */
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

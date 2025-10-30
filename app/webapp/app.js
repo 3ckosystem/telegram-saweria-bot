@@ -1,7 +1,33 @@
-const tg = window.Telegram?.WebApp; tg?.expand();
+// app/webapp/app.js
+const tg = window.Telegram?.WebApp; 
+tg?.expand();
 
 let PRICE_PER_GROUP = 25000;
 let LOADED_GROUPS = [];
+
+// ====== Config truncate ======
+const MAX_DESC_CHARS = 120; // ubah sesuai kebutuhan
+
+// Truncate aman emoji + potong di batas kata
+function truncateText(text, max = MAX_DESC_CHARS) {
+  if (!text) return "";
+  try {
+    const seg = new Intl.Segmenter('id', { granularity: 'grapheme' });
+    const graphemes = Array.from(seg.segment(text), s => s.segment);
+    if (graphemes.length <= max) return text;
+    const partial = graphemes.slice(0, max).join('');
+    const lastSpace = partial.lastIndexOf(' ');
+    const safe = lastSpace > 40 ? partial.slice(0, lastSpace) : partial;
+    return safe.replace(/[.,;:!\s]*$/,'') + '…';
+  } catch {
+    // Fallback sederhana
+    if (text.length <= max) return text;
+    let t = text.slice(0, max);
+    const lastSpace = t.lastIndexOf(' ');
+    if (lastSpace > 40) t = t.slice(0, lastSpace);
+    return t.replace(/[.,;:!\s]*$/,'') + '…';
+  }
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
   try {
@@ -38,24 +64,32 @@ function renderNeonList(groups) {
     thumb.className = 'thumb';
     if (img) thumb.style.backgroundImage = `url("${img}")`;
 
-    const meta = document.createElement('div'); meta.className = 'meta';
-    const title = document.createElement('div'); title.className = 'title'; title.textContent = name;
-    const p = document.createElement('div'); p.className = 'desc'; p.textContent = desc || 'Akses eksklusif grup pilihan.';
+    const meta = document.createElement('div'); 
+    meta.className = 'meta';
+
+    const title = document.createElement('div'); 
+    title.className = 'title'; 
+    title.textContent = name;
+
+    const p = document.createElement('div'); 
+    p.className = 'desc'; 
+    // ===== truncate untuk tampilan kartu =====
+    p.textContent = truncateText(desc || 'Akses eksklusif grup pilihan.');
 
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn-outline';
     btn.textContent = 'Pilih Grup';
 
-    // === BEHAVIOR BARU ===
-    // 1) Klik tombol: toggle select (HANYA di tombol)
+    // === BEHAVIOR ===
+    // 1) Klik tombol: toggle select (HANYA tombol)
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       toggleSelect(card);
     });
 
-    // 2) Klik di luar tombol: buka modal detail
+    // 2) Klik area kartu selain tombol: buka modal dengan deskripsi FULL
     card.addEventListener('click', (e) => {
       if (btn.contains(e.target)) return; // safety
       openDetailModal({ id, name, desc: longDesc || desc, image: img });
@@ -74,10 +108,10 @@ function renderNeonList(groups) {
 
 function toggleSelect(card){
   card.classList.toggle('selected');
-  // Update label di tombol pada kartu
   const btn = card.querySelector('.btn-outline');
   if (btn) updateButtonState(card, btn);
-  syncTotalText(); updateBadge();
+  syncTotalText(); 
+  updateBadge();
 }
 
 function updateButtonState(card, btn){
@@ -111,21 +145,44 @@ function openDetailModal(item){
   // klik backdrop untuk tutup
   m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
 }
-function closeDetailModal(){ const m=document.getElementById('detail'); m.hidden = true; m.innerHTML=''; }
 
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+function closeDetailModal(){ 
+  const m = document.getElementById('detail'); 
+  m.hidden = true; 
+  m.innerHTML=''; 
+}
 
+function escapeHtml(s){ 
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  })[c]); 
+}
 
+function getSelectedIds(){ 
+  return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id); 
+}
 
-function getSelectedIds(){ return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id); }
-function updateBadge(){ const n=getSelectedIds().length, b=document.getElementById('cartBadge'); if(n>0){b.hidden=false;b.textContent=String(n);}else b.hidden=true; }
+function updateBadge(){ 
+  const n = getSelectedIds().length, b = document.getElementById('cartBadge'); 
+  if(n>0){ b.hidden=false; b.textContent=String(n); } else b.hidden=true; 
+}
 
-function formatRupiah(n){ if(!Number.isFinite(n)) return "Rp 0"; return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
-function syncTotalText(){ const t = getSelectedIds().length * PRICE_PER_GROUP; document.getElementById('total-text').textContent = formatRupiah(t); document.getElementById('pay')?.toggleAttribute('disabled', t<=0); }
+function formatRupiah(n){ 
+  if(!Number.isFinite(n)) return "Rp 0"; 
+  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); 
+}
+
+function syncTotalText(){ 
+  const t = getSelectedIds().length * PRICE_PER_GROUP; 
+  document.getElementById('total-text').textContent = formatRupiah(t); 
+  document.getElementById('pay')?.toggleAttribute('disabled', t<=0); 
+}
 
 function getUserId(){
-  const u1 = tg?.initDataUnsafe?.user?.id; if (u1) return u1;
-  const qp = new URLSearchParams(window.location.search); const u2 = qp.get("uid");
+  const u1 = tg?.initDataUnsafe?.user?.id; 
+  if (u1) return u1;
+  const qp = new URLSearchParams(window.location.search); 
+  const u2 = qp.get("uid");
   return u2 ? parseInt(u2, 10) : null;
 }
 
@@ -168,6 +225,13 @@ async function onPay(){
   }, 2000);
 }
 
-function showQRModal(html){ const m=document.getElementById('qr'); m.innerHTML=`<div>${html}</div>`; m.hidden=false; }
-function hideQRModal(){ const m=document.getElementById('qr'); m.hidden=true; m.innerHTML=''; }
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+function showQRModal(html){ 
+  const m=document.getElementById('qr'); 
+  m.innerHTML=`<div>${html}</div>`; 
+  m.hidden=false; 
+}
+function hideQRModal(){ 
+  const m=document.getElementById('qr'); 
+  m.hidden=true; 
+  m.innerHTML=''; 
+}

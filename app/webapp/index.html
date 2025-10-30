@@ -7,26 +7,86 @@
 
   <!-- Critical CSS mini biar gak "telanjang" -->
   <style>
-    :root{--bg:#0b0b0b;--text:#fff;--muted:#b7b7b7;--accent:#ff2345;--stroke:#ff234566}
-    *{box-sizing:border-box} html,body{height:100%}
-    body{margin:0;background:var(--bg);color:var(--text);
-      font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial}
-    .header{position:sticky;top:0;z-index:5;padding:14px 16px 8px;
-      background:linear-gradient(180deg,rgba(0,0,0,.9),rgba(0,0,0,.45),transparent)}
+    :root{
+      --bg:#0b0b0b;--text:#fff;--muted:#b7b7b7;--accent:#ff2345;--stroke:#ff234566
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;background:var(--bg);color:var(--text);
+      font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial
+    }
+
+    .header{
+      position:sticky;top:0;z-index:5;padding:14px 16px 8px;
+      background:linear-gradient(180deg,rgba(0,0,0,.9),rgba(0,0,0,.45),transparent)
+    }
     .brand{font-weight:900;font-size:22px}
-    .badge{
-      display:inline-grid;place-items:center;font-size:12px;}
+
     .list{padding:10px 14px 120px}
-    .paybar{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;gap:14px;
-      align-items:center;padding:14px 16px 18px;background:linear-gradient(0deg,rgba(0,0,0,.85),rgba(0,0,0,.55));
-      border-top:1px solid #ffffff14;backdrop-filter:blur(8px)}
+
+    .paybar{
+      position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;gap:14px;
+      align-items:center;padding:14px 16px 18px;
+      background:linear-gradient(0deg,rgba(0,0,0,.85),rgba(0,0,0,.55));
+      border-top:1px solid #ffffff14;backdrop-filter:blur(8px)
+    }
     .total{flex:1;display:flex;flex-direction:column}
     .total small{color:var(--muted)}
-    .cta{appearance:none;border:0;min-width:230px;height:48px;border-radius:22px;
-      padding:0 18px;font-weight:800;color:#fff;background:var(--accent)}
+    .badge{
+      display:inline-grid;place-items:center;min-width:18px;height:18px;
+      padding:0 6px;border-radius:999px;background:#ff2a55;color:#fff;
+      font-size:12px;font-weight:700;vertical-align:middle
+    }
+    .cta{
+      appearance:none;border:0;min-width:230px;height:48px;border-radius:22px;
+      padding:0 18px;font-weight:800;color:#fff;background:var(--accent)
+    }
     .cta:disabled{filter:grayscale(1) opacity(.6)}
+
+    /* —— Clamp deskripsi kartu agar tidak kepanjangan di list —— */
+    .desc{
+      display:-webkit-box;
+      -webkit-line-clamp:3;        /* jumlah baris yang ditampilkan */
+      -webkit-box-orient:vertical;
+      overflow:hidden;
+    }
+
+    /* —— Modal baseline (detail & QR) —— */
+    .modal, .qr-modal{
+      position:fixed;inset:0;z-index:20;display:grid;place-items:end center;
+      background:rgba(0,0,0,.55);backdrop-filter:blur(3px)
+    }
+    .qr-modal > div{
+      margin:16px;padding:16px;border-radius:14px;background:#111;border:1px solid #ffffff1f;
+      max-width:min(420px,94vw);color:#fff;text-align:center
+    }
+    .qr-modal img{width:100%;height:auto;border-radius:10px;border:1px solid #ffffff1a}
+    .qr-modal .close{
+      margin-top:12px;width:100%;height:44px;border-radius:12px;border:0;
+      background:#2b2b2b;color:#fff;font-weight:700
+    }
+
+    .modal .sheet{
+      width:100%;max-width:720px;background:#0f0f0f;color:#fff;
+      border-radius:16px 16px 0 0;border-top:1px solid #ffffff1a;
+      padding:14px 16px 16px
+    }
+    .modal .hero{
+      width:100%;height:180px;border-radius:12px;border:1px solid #ffffff1a;
+      background:#151515 center/cover no-repeat;margin-bottom:12px
+    }
+    .modal .title{font-size:20px;font-weight:900;margin-bottom:6px}
+    .modal .desc{color:#c6c6c6;white-space:pre-wrap;margin-bottom:12px;display:block;-webkit-line-clamp:unset;-webkit-box-orient:unset;overflow:visible}
+    .modal .row{display:flex;gap:10px}
+    .modal button{
+      flex:1;height:44px;border-radius:12px;border:0;font-weight:800
+    }
+    .modal .close{background:#2b2b2b;color:#fff}
+    .modal .add{background:var(--accent);color:#fff}
   </style>
 
+  <!-- Styles utama (komponen kartu, tombol, dsb) -->
   <link rel="stylesheet" href="/webapp/styles.css?v=neon4"/>
 </head>
 <body>
@@ -34,75 +94,77 @@
     <div class="brand">VIP Catalog</div>
   </header>
 
+  <!-- daftar kartu -->
   <main id="list" class="list"></main>
 
+  <!-- bar total + checkout -->
   <footer class="paybar">
     <div class="total">
-      <small>Total <span id="cartBadge" class="badge">0</span> Group:</small>
+      <small>Total <span id="cartBadge" class="badge" hidden>0</span> Group:</small>
       <strong id="total-text" style="font-size:24px">Rp 0</strong>
     </div>
     <button id="pay" class="cta" disabled>Lanjutkan Pembayaran</button>
   </footer>
 
+  <!-- modal QR & Detail -->
   <div id="qr" class="qr-modal" hidden></div>
-  <!-- modal detail -->
   <div id="detail" class="modal" hidden></div>
+
   <script src="/webapp/app.js?v=neon4"></script>
+
+  <!-- Gate check: blokir Mini App kalau belum join/subscribe -->
   <script>
-(async () => {
-  // cari uid dari query (?uid=...) atau dari initDataUnsafe
-  const url = new URL(location.href);
-  let uid = url.searchParams.get('uid');
-  try {
-    if (!uid && window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe) {
-      uid = Telegram.WebApp.initDataUnsafe.user?.id;
-    }
-  } catch (e) {}
+  (async () => {
+    // cari uid dari query (?uid=...) atau dari initDataUnsafe
+    const url = new URL(location.href);
+    let uid = url.searchParams.get('uid');
+    try {
+      if (!uid && window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe) {
+        uid = Telegram.WebApp.initDataUnsafe.user?.id;
+      }
+    } catch (e) {}
 
-  if (!uid) {
-    document.body.innerHTML = "<div style='padding:16px;font-family:sans-serif'>Tidak ada UID Telegram. Buka via bot.</div>";
-    return;
-  }
-
-  // Cek gate ke server
-  let data;
-  try {
-    const res = await fetch(`/api/gate/status?uid=${encodeURIComponent(uid)}`);
-    if (res.status === 403) {
-      const payload = await res.json(); // {detail:{...}}
-      showGateBlock(payload.detail);
+    if (!uid) {
+      document.body.innerHTML = "<div style='padding:16px;font-family:sans-serif'>Tidak ada UID Telegram. Buka via bot.</div>";
       return;
     }
-    data = await res.json(); // {passed:true,...}
-  } catch (e) {
-    document.body.innerHTML = "<div style='padding:16px'>Gagal memeriksa status. Coba ulang.</div>";
-    return;
+
+    // Cek gate ke server
+    try {
+      const res = await fetch(`/api/gate/status?uid=${encodeURIComponent(uid)}`, { cache: 'no-store' });
+      if (res.status === 403) {
+        const payload = await res.json(); // {detail:{...}}
+        showGateBlock(payload.detail);
+        return;
+      }
+      const data = await res.json(); // {passed:true,...}
+      if (!data?.passed) {
+        showGateBlock(data);
+        return;
+      }
+      // lulus → list akan dirender oleh app.js
+    } catch (e) {
+      document.body.innerHTML = "<div style='padding:16px'>Gagal memeriksa status. Coba ulang.</div>";
+      return;
+    }
+  })();
+
+  function showGateBlock(info) {
+    const g = (info?.group_invites || []).filter(Boolean);
+    const c = (info?.channel_invites || []).filter(Boolean);
+    const html = `
+      <div style="max-width:520px;margin:24px auto;padding:16px 12px;font-family:sans-serif;text-align:center;color:#fff">
+        <h3 style="margin:0 0 8px">Wajib Join/Subscribe Dulu</h3>
+        <p style="opacity:.85;margin:0 0 10px">Status: ${(info?.ok_count||0)}/${(info?.total_required||0)} terdeteksi join.</p>
+        <div style="margin-top:12px;display:grid;gap:10px">
+          ${g.map(u => `<a style="display:block;padding:12px;border-radius:10px;background:#1b1b1b;border:1px solid #ffffff1a;color:#fff;text-decoration:none" href="${u}" target="_blank" rel="noopener">Join Group</a>`).join("")}
+          ${c.map(u => `<a style="display:block;padding:12px;border-radius:10px;background:#1b1b1b;border:1px solid #ffffff1a;color:#fff;text-decoration:none" href="${u}" target="_blank" rel="noopener">Subscribe Channel</a>`).join("")}
+        </div>
+        <p style="opacity:.8;margin-top:14px">Setelah join, kembali ke bot dan tekan <b>Re-check</b>.</p>
+      </div>
+    `;
+    document.body.innerHTML = html;
   }
-
-  if (!data?.passed) {
-    showGateBlock(data);
-    return;
-  }
-
-  // >>>> Lanjutkan render normal Mini App kamu di sini <<<<
-
-})();
-
-function showGateBlock(info) {
-  const g = (info?.group_invites || []).filter(Boolean);
-  const c = (info?.channel_invites || []).filter(Boolean);
-  const root = document.getElementById('app') || document.body;
-  root.innerHTML = `
-    <div style="max-width:520px;margin:24px auto;padding:16px;font-family:sans-serif;text-align:center">
-      <h3>Wajib Join/Subscribe Dulu</h3>
-      <p>Status: ${(info?.ok_count||0)}/${(info?.total_required||0)} terdeteksi join.</p>
-      ${g.map(u => `<p><a href="${u}" target="_blank" rel="noopener">Join Group</a></p>`).join("")}
-      ${c.map(u => `<p><a href="${u}" target="_blank" rel="noopener">Subscribe Channel</a></p>`).join("")}
-      <p style="margin-top:16px">Setelah join, kembali ke bot dan tekan <b>Re-check</b>.</p>
-    </div>
-  `;
-}
-</script>
-
+  </script>
 </body>
 </html>
