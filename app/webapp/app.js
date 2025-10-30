@@ -133,13 +133,13 @@ function openDetailModal(item){
   const selected = card?.classList.contains('selected');
 
   m.innerHTML = `
-    <div class="sheet">
-      <div class="hero">
+    <div class="sheet" id="sheet">
+      <div class="hero" id="hero">
         ${item.image ? `<img id="detail-img" src="${item.image}" alt="${escapeHtml(item.name)}">` : ''}
       </div>
-      <div class="title">${escapeHtml(item.name)}</div>
-      <div class="desc">${escapeHtml(item.desc || '')}</div>
-      <div class="row">
+      <div class="title" id="ttl">${escapeHtml(item.name)}</div>
+      <div class="desc" id="dsc">${escapeHtml(item.desc || '')}</div>
+      <div class="row" id="btns">
         <button class="close">Tutup</button>
         <button class="add">${selected ? 'Batal' : 'Pilih Grup'}</button>
       </div>
@@ -147,35 +147,52 @@ function openDetailModal(item){
   `;
   m.hidden = false;
 
-  // --- ukur orientasi & set max-height gambar agar sisakan ruang teks+tombol ---
-  const sheet = m.querySelector('.sheet');
-  const img   = m.querySelector('#detail-img');
-  const reservePx = 200; // kira-kira tinggi judul+desc+tombol (akan disisakan)
+  const sheet = document.getElementById('sheet');
+  const hero  = document.getElementById('hero');
+  const img   = document.getElementById('detail-img');
+  const ttl   = document.getElementById('ttl');
+  const dsc   = document.getElementById('dsc');
+  const btns  = document.getElementById('btns');
+
+  // Hitung tinggi hero agar: hero + teks + tombol ≈ 98vh (hampir fullscreen)
+  const fitHero = () => {
+    const vh = window.innerHeight;
+    // tinggi non-gambar (judul + deskripsi + tombol + padding sheet + gap)
+    const styles = getComputedStyle(sheet);
+    const pad = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
+    const gaps = 12 * 2; // gap kira2
+    const nonImg = ttl.offsetHeight + dsc.offsetHeight + btns.offsetHeight + pad + gaps;
+
+    // sisa aman untuk area gambar
+    const target = Math.max(200, Math.min(vh * 0.98 - nonImg, vh * 0.92));
+    hero.style.maxHeight = `${Math.floor(target)}px`;
+
+    // Jika masih banyak “pillarbox” (portrait sempit), boleh pakai cover agar lebar penuh
+    if (img && img.naturalWidth && img.naturalHeight) {
+      const portrait = img.naturalHeight > img.naturalWidth * 1.15;
+      img.style.objectFit = portrait ? 'cover' : 'contain';
+      // Saat cover, pastikan tinggi persis memenuhi hero
+      if (portrait) {
+        img.style.height = '100%';
+        hero.style.height = `${Math.floor(target)}px`;
+      } else {
+        img.style.height = 'auto';
+        hero.style.height = 'auto';
+      }
+    }
+  };
 
   if (img) {
-    const fitImg = () => {
-      // hitung tinggi maksimum yang aman: hampir setinggi layar, dikurangi ruang teks
-      const maxSafe = Math.max(220, Math.min(window.innerHeight * 0.96 - reservePx, window.innerHeight * 0.9));
-      img.style.maxHeight = `${Math.floor(maxSafe)}px`;
-
-      // deteksi orientasi sumber
-      if (img.naturalWidth && img.naturalHeight) {
-        const portrait = img.naturalHeight >= img.naturalWidth;
-        sheet.classList.toggle('portrait', portrait);
-        sheet.classList.toggle('landscape', !portrait);
-      }
-    };
-    if (img.complete) fitImg(); else img.addEventListener('load', fitImg, { once: true });
-    window.addEventListener('resize', fitImg, { once: true }); // sesuaikan sekali saat resize
+    if (img.complete) fitHero();
+    else img.addEventListener('load', fitHero, { once:true });
+    window.addEventListener('resize', fitHero, { passive:true });
   }
 
   m.querySelector('.close')?.addEventListener('click', () => closeDetailModal());
-  m.querySelector('.add')?.addEventListener('click', () => {
-    if (card) toggleSelect(card);
-    closeDetailModal();
-  });
+  m.querySelector('.add')?.addEventListener('click', () => { if (card) toggleSelect(card); closeDetailModal(); });
   m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
 }
+
 
 
 

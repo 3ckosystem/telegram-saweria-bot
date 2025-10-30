@@ -82,55 +82,31 @@
 }
 
 /* ===== DETAIL MODAL (image keeps its own aspect) ===== */
-/* ==== MODAL: layout kolom rapi, tanpa overlay ==== */
-.modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,.65); padding: 18px; z-index: 8; }
-.modal[hidden]{ display:none !important; pointer-events:none !important; }
-
-.modal > .sheet{
-  width: min(94vw, 720px);          /* modal boleh lebar, tapi responsif */
-  max-height: 96vh;                 /* hampir full screen */
-  overflow: auto;                   /* kalau konten panjang, scroll rapi */
-  background: #0f0f10;
-  border: 1px solid #ffffff14;
-  border-radius: 16px;
-  padding: 16px;
-  color: #fff;
-  display: flex;
-  flex-direction: column;           /* <<< kolom: gambar -> teks -> tombol */
-  gap: 12px;
+/* Modal container tetap hampir full screen */
+.modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.65);padding:18px;z-index:8}
+.modal[hidden]{display:none!important;pointer-events:none!important}
+.modal>.sheet{
+  width:min(94vw,720px);
+  max-height:98vh;                 /* hampir full-screen */
+  overflow:auto;
+  background:#0f0f10;border:1px solid #ffffff14;border-radius:16px;
+  padding:16px;color:#fff;display:flex;flex-direction:column;gap:12px;
 }
 
-/* Hero sebagai blok, tidak jadi background lagi */
-.sheet .hero{
-  margin: 0; padding: 0;
-  border-radius: 12px;
-  background: #1c0f12;
-  border: 1px solid #ffffff14;
-  overflow: hidden;
-}
+/* HERO jadi blok biasa; tinggi akan di-set dinamis oleh JS */
+.sheet .hero{border-radius:12px;background:#1c0f12;border:1px solid #ffffff14;overflow:hidden}
 .sheet .hero img{
-  display: block;
-  width: 100%;
-  height: auto;                     /* biar rasio asli terjaga */
-  object-fit: contain;              /* jangan crop */
-  /* max-height akan di-set dinamis via JS (fallback aman di CSS) */
-  max-height: 70vh;
+  display:block;width:100%;
+  height:auto;                     /* default: biar rasio asli terjaga */
+  object-fit:contain;              /* JS bisa ganti ke 'cover' jika mau fill */
 }
 
-/* Teks dan tombol posisi normal (tidak absolute/overlay) */
-.sheet .title{ font-size: 22px; font-weight: 900; margin: 0 4px; }
-.sheet .desc { color:#cdd0d4; font-size:14px; line-height:1.45; white-space:pre-wrap; margin: 0 4px; }
-.sheet .row  { display:flex; gap:10px; margin-top: 4px; }
-.sheet .close, .sheet .add{
-  flex:1 1 auto; height:44px; border-radius:14px; border:1px solid #ffffff1f; color:#fff;
-  background:#1b1b1b; cursor:pointer; -webkit-tap-highlight-color:transparent; touch-action:manipulation;
-}
-.sheet .add{ background:#ff2345; border-color:#ff2345; font-weight:800 }
-
-/* Varian orientasi (JS menambah class ini) */
-.sheet.portrait .hero img  { max-height: 84vh; }   /* portrait dapat porsi tinggi lebih besar */
-.sheet.landscape .hero img { max-height: 70vh; }
+/* teks & tombol */
+.sheet .title{font-size:22px;font-weight:900;margin:0 4px}
+.sheet .desc{color:#cdd0d4;font-size:14px;line-height:1.45;white-space:pre-wrap;margin:0 4px}
+.sheet .row{display:flex;gap:10px;margin-top:4px}
+.sheet .close,.sheet .add{flex:1 1 auto;height:44px;border-radius:14px;border:1px solid #ffffff1f;color:#fff;background:#1b1b1b;cursor:pointer}
+.sheet .add{background:#ff2345;border-color:#ff2345;font-weight:800}
 
 /* tombol di kartu tetap klik-able */
 .btn-outline, .cta { cursor:pointer; -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
