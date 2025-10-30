@@ -135,7 +135,7 @@ function openDetailModal(item){
   m.innerHTML = `
     <div class="sheet">
       <div class="hero">
-        ${item.image ? `<img src="${item.image}" alt="${escapeHtml(item.name)}">` : ''}
+        ${item.image ? `<img id="detail-img" src="${item.image}" alt="${escapeHtml(item.name)}">` : ''}
       </div>
       <div class="title">${escapeHtml(item.name)}</div>
       <div class="desc">${escapeHtml(item.desc || '')}</div>
@@ -147,22 +147,27 @@ function openDetailModal(item){
   `;
   m.hidden = false;
 
-  // --- NEW: set sheet class based on image aspect ---
+  // --- ukur orientasi & set max-height gambar agar sisakan ruang teks+tombol ---
   const sheet = m.querySelector('.sheet');
-  const imgEl = m.querySelector('.hero img');
-  const applyAspectClass = () => {
-    if (!imgEl || !sheet) return;
-    const w = imgEl.naturalWidth || imgEl.width || 1;
-    const h = imgEl.naturalHeight || imgEl.height || 1;
-    const isPortrait = h >= w;
-    sheet.classList.toggle('portrait', isPortrait);
-    sheet.classList.toggle('landscape', !isPortrait);
-  };
-  if (imgEl) {
-    if (imgEl.complete) applyAspectClass();
-    else imgEl.addEventListener('load', applyAspectClass, { once:true });
+  const img   = m.querySelector('#detail-img');
+  const reservePx = 200; // kira-kira tinggi judul+desc+tombol (akan disisakan)
+
+  if (img) {
+    const fitImg = () => {
+      // hitung tinggi maksimum yang aman: hampir setinggi layar, dikurangi ruang teks
+      const maxSafe = Math.max(220, Math.min(window.innerHeight * 0.96 - reservePx, window.innerHeight * 0.9));
+      img.style.maxHeight = `${Math.floor(maxSafe)}px`;
+
+      // deteksi orientasi sumber
+      if (img.naturalWidth && img.naturalHeight) {
+        const portrait = img.naturalHeight >= img.naturalWidth;
+        sheet.classList.toggle('portrait', portrait);
+        sheet.classList.toggle('landscape', !portrait);
+      }
+    };
+    if (img.complete) fitImg(); else img.addEventListener('load', fitImg, { once: true });
+    window.addEventListener('resize', fitImg, { once: true }); // sesuaikan sekali saat resize
   }
-  // ---------------------------------------------------
 
   m.querySelector('.close')?.addEventListener('click', () => closeDetailModal());
   m.querySelector('.add')?.addEventListener('click', () => {
@@ -171,6 +176,7 @@ function openDetailModal(item){
   });
   m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
 }
+
 
 
 function closeDetailModal(){
