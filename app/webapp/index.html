@@ -5,78 +5,36 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>EnSEXlopedia VIP Catalog</title>
 
-  <!-- Critical CSS mini -->
+  <!-- Critical CSS mini biar gak "telanjang" -->
   <style>
     :root{
-      --bg:#0b0b0b;--text:#fff;--muted:#b7b7b7;
-      --accent:#ff2345;--stroke:#ff234566
+      --bg:#0b0b0b;--text:#fff;--muted:#b7b7b7;--accent:#ff2345;--stroke:#ff234566
     }
-    *{box-sizing:border-box;margin:0;padding:0}
+    *{box-sizing:border-box}
     html,body{height:100%}
     body{
-      background:var(--bg);color:var(--text);
+      margin:0;background:var(--bg);color:var(--text);
       font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial
     }
 
-    /* ===== HEADER ===== */
     .header{
       position:sticky;top:0;z-index:5;padding:14px 16px 8px;
       background:linear-gradient(180deg,rgba(0,0,0,.9),rgba(0,0,0,.45),transparent)
     }
     .brand{font-weight:900;font-size:22px}
 
-    /* ===== CARD LIST ===== */
     .list{padding:10px 14px 120px}
-    .card{
-      position:relative;display:flex;gap:14px;margin-bottom:14px;
-      border:1px solid var(--stroke);border-radius:16px;padding:12px;
-      background:#121212;box-shadow:0 0 12px #ff234522;
-      align-items:flex-start;transition:all .25s ease
-    }
-    .card.selected{border-color:#ffffff33;box-shadow:none;opacity:.9}
-    .thumb{
-      width:92px;height:92px;border-radius:14px;
-      background:#222 center/cover no-repeat;
-      flex-shrink:0;position:relative
-    }
-    .check{
-      position:absolute;top:8px;left:8px;width:20px;height:20px;
-      background:rgba(0,0,0,.6);border-radius:50%;display:flex;
-      align-items:center;justify-content:center;opacity:.9
-    }
-    .meta{flex:1;display:flex;flex-direction:column;align-items:flex-start}
-    .title{font-weight:800;font-size:17px;margin-bottom:4px}
-    .desc{
-      display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
-      overflow:hidden;color:var(--muted);font-size:14px;margin-bottom:10px;
-    }
-    .btn-outline{
-      align-self:flex-end; /* rata kanan */
-      appearance:none;cursor:pointer;
-      border:1.8px solid var(--accent);
-      border-radius:14px;padding:6px 14px;
-      background:var(--accent);color:#fff;
-      font-weight:700;font-size:14px;transition:all .25s ease
-    }
-    .card.selected .btn-outline{
-      background:transparent;
-      color:var(--accent);
-      border-color:var(--accent);
-    }
 
-    /* ===== PAYBAR ===== */
     .paybar{
-      position:fixed;left:0;right:0;bottom:0;z-index:6;
-      display:flex;gap:14px;align-items:center;
-      padding:14px 16px 18px;
+      position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;gap:14px;
+      align-items:center;padding:14px 16px 18px;
       background:linear-gradient(0deg,rgba(0,0,0,.85),rgba(0,0,0,.55));
       border-top:1px solid #ffffff14;backdrop-filter:blur(8px)
     }
     .total{flex:1;display:flex;flex-direction:column}
     .total small{color:var(--muted)}
     .badge{
-      display:inline-grid;place-items:center;min-width:18px;height:18px;
-      padding:0 6px;border-radius:999px;background:#ff2a55;color:#fff;
+      display:inline-grid;place-items:center;color:#fff;
       font-size:12px;font-weight:700;vertical-align:middle
     }
     .cta{
@@ -85,19 +43,24 @@
     }
     .cta:disabled{filter:grayscale(1) opacity(.6)}
 
-    /* ===== MODALS ===== */
+    /* —— Clamp deskripsi kartu agar tidak kepanjangan di list —— */
+    .desc{
+      display:-webkit-box;
+      -webkit-line-clamp:3;        /* jumlah baris yang ditampilkan */
+      -webkit-box-orient:vertical;
+      overflow:hidden;
+    }
+
+    /* —— Modal baseline (detail & QR) —— */
     .modal, .qr-modal{
       position:fixed;inset:0;z-index:20;display:grid;place-items:end center;
       background:rgba(0,0,0,.55);backdrop-filter:blur(3px)
     }
     .qr-modal > div{
-      margin:16px;padding:16px;border-radius:14px;background:#111;
-      border:1px solid #ffffff1f;max-width:min(420px,94vw);
-      color:#fff;text-align:center
+      margin:16px;padding:16px;border-radius:14px;background:#111;border:1px solid #ffffff1f;
+      max-width:min(420px,94vw);color:#fff;text-align:center
     }
-    .qr-modal img{
-      width:100%;height:auto;border-radius:10px;border:1px solid #ffffff1a
-    }
+    .qr-modal img{width:100%;height:auto;border-radius:10px;border:1px solid #ffffff1a}
     .qr-modal .close{
       margin-top:12px;width:100%;height:44px;border-radius:12px;border:0;
       background:#2b2b2b;color:#fff;font-weight:700
@@ -113,11 +76,7 @@
       background:#151515 center/cover no-repeat;margin-bottom:12px
     }
     .modal .title{font-size:20px;font-weight:900;margin-bottom:6px}
-    .modal .desc{
-      color:#c6c6c6;white-space:pre-wrap;margin-bottom:12px;
-      display:block;-webkit-line-clamp:unset;-webkit-box-orient:unset;
-      overflow:visible
-    }
+    .modal .desc{color:#c6c6c6;white-space:pre-wrap;margin-bottom:12px;display:block;-webkit-line-clamp:unset;-webkit-box-orient:unset;overflow:visible}
     .modal .row{display:flex;gap:10px}
     .modal button{
       flex:1;height:44px;border-radius:12px;border:0;font-weight:800
@@ -126,63 +85,73 @@
     .modal .add{background:var(--accent);color:#fff}
   </style>
 
-  <link rel="stylesheet" href="/webapp/styles.css?v=neon5"/>
+  <!-- Styles utama (komponen kartu, tombol, dsb) -->
+  <link rel="stylesheet" href="/webapp/styles.css?v=neon4"/>
 </head>
 <body>
   <header class="header">
     <div class="brand">VIP Catalog</div>
   </header>
 
+  <!-- daftar kartu -->
   <main id="list" class="list"></main>
 
+  <!-- bar total + checkout -->
   <footer class="paybar">
     <div class="total">
-      <small>Total <span id="cartBadge" class="badge" hidden>0</span> Group:</small>
+      <small>Total <span id="cartBadge" class="badge">0</span> Group:</small>
       <strong id="total-text" style="font-size:24px">Rp 0</strong>
     </div>
     <button id="pay" class="cta" disabled>Lanjutkan Pembayaran</button>
   </footer>
 
+  <!-- modal QR & Detail -->
   <div id="qr" class="qr-modal" hidden></div>
   <div id="detail" class="modal" hidden></div>
 
-  <script src="/webapp/app.js?v=neon5"></script>
+  <script src="/webapp/app.js?v=neon4"></script>
 
-  <!-- Gate check -->
+  <!-- Gate check: blokir Mini App kalau belum join/subscribe -->
   <script>
   (async () => {
+    // cari uid dari query (?uid=...) atau dari initDataUnsafe
     const url = new URL(location.href);
     let uid = url.searchParams.get('uid');
     try {
       if (!uid && window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe) {
         uid = Telegram.WebApp.initDataUnsafe.user?.id;
       }
-    } catch {}
+    } catch (e) {}
+
     if (!uid) {
       document.body.innerHTML = "<div style='padding:16px;font-family:sans-serif'>Tidak ada UID Telegram. Buka via bot.</div>";
       return;
     }
+
+    // Cek gate ke server
     try {
       const res = await fetch(`/api/gate/status?uid=${encodeURIComponent(uid)}`, { cache: 'no-store' });
       if (res.status === 403) {
-        const payload = await res.json();
+        const payload = await res.json(); // {detail:{...}}
         showGateBlock(payload.detail);
         return;
       }
-      const data = await res.json();
+      const data = await res.json(); // {passed:true,...}
       if (!data?.passed) {
         showGateBlock(data);
         return;
       }
-    } catch {
+      // lulus → list akan dirender oleh app.js
+    } catch (e) {
       document.body.innerHTML = "<div style='padding:16px'>Gagal memeriksa status. Coba ulang.</div>";
+      return;
     }
   })();
 
   function showGateBlock(info) {
     const g = (info?.group_invites || []).filter(Boolean);
     const c = (info?.channel_invites || []).filter(Boolean);
-    document.body.innerHTML = `
+    const html = `
       <div style="max-width:520px;margin:24px auto;padding:16px 12px;font-family:sans-serif;text-align:center;color:#fff">
         <h3 style="margin:0 0 8px">Wajib Join/Subscribe Dulu</h3>
         <p style="opacity:.85;margin:0 0 10px">Status: ${(info?.ok_count||0)}/${(info?.total_required||0)} terdeteksi join.</p>
@@ -191,7 +160,9 @@
           ${c.map(u => `<a style="display:block;padding:12px;border-radius:10px;background:#1b1b1b;border:1px solid #ffffff1a;color:#fff;text-decoration:none" href="${u}" target="_blank" rel="noopener">Subscribe Channel</a>`).join("")}
         </div>
         <p style="opacity:.8;margin-top:14px">Setelah join, kembali ke bot dan tekan <b>Re-check</b>.</p>
-      </div>`;
+      </div>
+    `;
+    document.body.innerHTML = html;
   }
   </script>
 </body>
