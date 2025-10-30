@@ -1,5 +1,5 @@
 // app/webapp/app.js
-const tg = window.Telegram?.WebApp; 
+const tg = window.Telegram?.WebApp;
 tg?.expand();
 
 let PRICE_PER_GROUP = 25000;
@@ -64,21 +64,23 @@ function renderNeonList(groups) {
     thumb.className = 'thumb';
     if (img) thumb.style.backgroundImage = `url("${img}")`;
 
-    const meta = document.createElement('div'); 
+    const meta = document.createElement('div');
     meta.className = 'meta';
 
-    const title = document.createElement('div'); 
-    title.className = 'title'; 
+    const title = document.createElement('div');
+    title.className = 'title';
     title.textContent = name;
 
-    const p = document.createElement('div'); 
-    p.className = 'desc'; 
-    // ===== truncate untuk tampilan kartu =====
+    const p = document.createElement('div');
+    p.className = 'desc';
+    // truncate untuk tampilan kartu
     p.textContent = truncateText(desc || 'Akses eksklusif grup pilihan.');
 
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'btn-outline';
+    // default: berwarna & rata kanan
+    btn.className = 'btn-solid';
+    btn.style.marginLeft = 'auto';
     btn.textContent = 'Pilih Grup';
 
     // === BEHAVIOR ===
@@ -99,7 +101,7 @@ function renderNeonList(groups) {
     card.append(check, thumb, meta);
     root.appendChild(card);
 
-    // set label awal sesuai state
+    // set label + warna awal sesuai state
     updateButtonState(card, btn);
   });
 
@@ -108,15 +110,21 @@ function renderNeonList(groups) {
 
 function toggleSelect(card){
   card.classList.toggle('selected');
-  const btn = card.querySelector('.btn-outline');
+  const btn = card.querySelector('button');
   if (btn) updateButtonState(card, btn);
-  syncTotalText(); 
+  syncTotalText();
   updateBadge();
 }
 
 function updateButtonState(card, btn){
   const selected = card.classList.contains('selected');
+  // ganti teks
   btn.textContent = selected ? 'Batal' : 'Pilih Grup';
+  // ganti gaya: berwarna saat BELUM dipilih, ghost saat SUDAH dipilih
+  btn.classList.toggle('btn-solid', !selected);
+  btn.classList.toggle('btn-ghost', selected);
+  // tetap rata kanan
+  if (!btn.style.marginLeft) btn.style.marginLeft = 'auto';
 }
 
 function openDetailModal(item){
@@ -127,7 +135,7 @@ function openDetailModal(item){
   m.innerHTML = `
     <div class="sheet">
       <div class="hero">
-        ${item.image ? `<img src="${item.image}" alt="${escapeHtml(item.name)}">` : ''}
+        ${item.image ? `<img src="${item.image}" alt="${escapeHtml(item.name)}" loading="lazy">` : ''}
       </div>
       <div class="title">${escapeHtml(item.name)}</div>
       <div class="desc">${escapeHtml(item.desc || '')}</div>
@@ -147,43 +155,44 @@ function openDetailModal(item){
   m.addEventListener('click', (e) => { if (e.target === m) closeDetailModal(); }, { once:true });
 }
 
-
-function closeDetailModal(){ 
-  const m = document.getElementById('detail'); 
-  m.hidden = true; 
-  m.innerHTML=''; 
+function closeDetailModal(){
+  const m = document.getElementById('detail');
+  m.hidden = true;
+  m.innerHTML = '';
 }
 
-function escapeHtml(s){ 
+function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-  })[c]); 
+  })[c]);
 }
 
-function getSelectedIds(){ 
-  return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id); 
+function getSelectedIds(){
+  return [...document.querySelectorAll('.card.selected')].map(el => el.dataset.id);
 }
 
-function updateBadge(){ 
-  const n = getSelectedIds().length, b = document.getElementById('cartBadge'); 
-  if(n>0){ b.hidden=false; b.textContent=String(n); } else b.hidden=true; 
+function updateBadge(){
+  const n = getSelectedIds().length;
+  const b = document.getElementById('cartBadge');
+  if (n > 0) { b.hidden = false; b.textContent = String(n); }
+  else b.hidden = true;
 }
 
-function formatRupiah(n){ 
-  if(!Number.isFinite(n)) return "Rp 0"; 
-  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); 
+function formatRupiah(n){
+  if (!Number.isFinite(n)) return "Rp 0";
+  return "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
-function syncTotalText(){ 
-  const t = getSelectedIds().length * PRICE_PER_GROUP; 
-  document.getElementById('total-text').textContent = formatRupiah(t); 
-  document.getElementById('pay')?.toggleAttribute('disabled', t<=0); 
+function syncTotalText(){
+  const t = getSelectedIds().length * PRICE_PER_GROUP;
+  document.getElementById('total-text').textContent = formatRupiah(t);
+  document.getElementById('pay')?.toggleAttribute('disabled', t <= 0);
 }
 
 function getUserId(){
-  const u1 = tg?.initDataUnsafe?.user?.id; 
+  const u1 = tg?.initDataUnsafe?.user?.id;
   if (u1) return u1;
-  const qp = new URLSearchParams(window.location.search); 
+  const qp = new URLSearchParams(window.location.search);
   const u2 = qp.get("uid");
   return u2 ? parseInt(u2, 10) : null;
 }
@@ -220,20 +229,21 @@ async function onPay(){
   const statusUrl = `${window.location.origin}/api/invoice/${inv.invoice_id}/status`;
   let t = setInterval(async ()=>{
     try{
-      const r = await fetch(statusUrl); if(!r.ok) return;
+      const r = await fetch(statusUrl);
+      if(!r.ok) return;
       const s = await r.json();
       if (s.status === "PAID"){ clearInterval(t); hideQRModal(); tg?.close?.(); }
     }catch{}
   }, 2000);
 }
 
-function showQRModal(html){ 
-  const m=document.getElementById('qr'); 
-  m.innerHTML=`<div>${html}</div>`; 
-  m.hidden=false; 
+function showQRModal(html){
+  const m = document.getElementById('qr');
+  m.innerHTML = `<div>${html}</div>`;
+  m.hidden = false;
 }
-function hideQRModal(){ 
-  const m=document.getElementById('qr'); 
-  m.hidden=true; 
-  m.innerHTML=''; 
+function hideQRModal(){
+  const m = document.getElementById('qr');
+  m.hidden = true;
+  m.innerHTML = '';
 }
