@@ -87,31 +87,14 @@
   background:rgba(0,0,0,.65); padding:18px; z-index:8 }
 .modal[hidden]{ display:none !important; pointer-events:none !important; }
 
+/* ==== Modal: longgarin tinggi total ==== */
 .modal > .sheet{
-  width:min(92vw, 880px);                 /* wider on large screens */
-  max-height:88vh;
-  overflow:auto;
-  background:#0f0f10;
-  border:1px solid #ffffff14;
-  border-radius:16px;
-  padding:16px;
-  color:#fff;
-  display:flex;                           /* keep content stacked */
-  flex-direction:column;
+  max-height: 96vh;            /* dari 88vh -> 96vh */
+  gap: 12px;                   /* beri ruang antar elemen */
 }
 
-/* Container doesn’t force aspect anymore */
-.sheet .hero{
-  width:100%;
-  display:flex;
-  justify-content:center;
-  background:transparent;
-  border:0;
-  padding:0;
-  margin:0;
-}
-
-/* Image draws its own frame */
+/* Gambar tetap contain & besar sesuai orientasi */
+.sheet .hero{ margin: 0; padding: 0; }
 .sheet .hero img{
   display:block;
   max-width:100%;
@@ -120,12 +103,21 @@
   object-fit:contain;
   border-radius:12px;
   border:1px solid #ffffff14;
-  background:#0f0f10;
 }
 
-/* Dynamic sizing */
-.sheet.landscape .hero img{ max-height:62vh; }  /* videos/photos wide */
-.sheet.portrait  .hero img{ max-height:84vh; }  /* make portrait much larger */
+/* Portrait: kasih porsi tinggi lebih besar + sheet sedikit lebih ramping
+   agar foto terlihat lebih besar secara visual */
+.sheet.portrait{
+  width: min(92vw, 560px);     /* rapatkan lebar sheet pada portrait */
+}
+.sheet.portrait .hero img{
+  max-height: 84vh;            /* hampir layar penuh */
+}
+
+/* Landscape: tetap nyaman, tapi lebih lega dari sebelumnya */
+.sheet.landscape .hero img{
+  max-height: 70vh;            /* naik dari 62vh */
+}
 
 .sheet .title{ font-size:22px; font-weight:900; margin:12px 0 6px }
 .sheet .desc{ color:#cdd0d4; font-size:14px; line-height:1.45; white-space:pre-wrap }
